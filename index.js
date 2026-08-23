@@ -186,7 +186,7 @@ async function createSocket(number, authPath, qr = false) {
 
     let version;
     try   { ({ version } = await fetchLatestBaileysVersion()); }
-    catch (e) { version = [2, 3000, 0]; }
+    catch (e) { version = [2, 3000, 1015901307]; }
 
     const client = makeWASocket({
         version,
@@ -196,8 +196,11 @@ async function createSocket(number, authPath, qr = false) {
         },
         printQRInTerminal: qr,
         logger,
-        browser:          Browsers.windows("Chrome"),
+        // FIX: Ubuntu Chrome signature prevents 'Couldn't link device' error
+        browser:          Browsers.ubuntu("Chrome"),
         syncFullHistory:  false,
+        connectTimeoutMs: 60000,
+        defaultQueryTimeoutMs: 60000,
         shouldIgnoreJid:  jid => isJidBroadcast(jid),
         getMessage:       async () => ({})
     });
@@ -345,7 +348,7 @@ function waitForConnection(timeoutMs) {
 }
 
 // ============================================================
-//  PAIRING CODE (FIXED)
+//  PAIRING CODE (FAST & FIXED)
 // ============================================================
 
 async function generatePairingCode() {
@@ -353,7 +356,7 @@ async function generatePairingCode() {
     const number = normalizeNumber(input);
 
     if (!number) {
-        console.log(`${C.red}❌ Invalid number. Example: 923001234567${C.reset}`);
+        console.log(`${C.red}❌ Invalid number. Example: 923001234567 or 919876543210${C.reset}`);
         return;
     }
 
@@ -362,20 +365,25 @@ async function generatePairingCode() {
         return;
     }
 
+    // Clean session directory to avoid 'Couldn't link device' conflict
+    const authPath = getAuthPath(number);
+    if (fs.existsSync(authPath)) {
+        fs.rmSync(authPath, { recursive: true, force: true });
+    }
+
     if (state.client) {
         const old   = state.client;
         state.client = null;
         await closeSocket(old);
     }
 
-    const authPath = getAuthPath(number);
     state.number   = number;
     state.authPath = authPath;
 
     const maxAttempts = 3;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-        console.log(`\n${C.cyan}🔄 Attempt ${attempt}/${maxAttempts} – Creating socket...${C.reset}`);
+        console.log(`\n${C.cyan}🔄 Attempt ${attempt}/${maxAttempts} – Initializing WebSocket...${C.reset}`);
 
         state.pairingInProgress = true;
         state.connected         = false;
@@ -390,48 +398,25 @@ async function generatePairingCode() {
             continue;
         }
 
-        if (state.credsRegistered) {
-            console.log(`${C.yellow}ℹ️  Already registered. Use option 5 to logout first.${C.reset}`);
-            state.pairingInProgress = false;
-            return;
-        }
-
-        // Setup temporary creds saver
-        state.client.ev.on("creds.update", debounce(async () => {
+        // Save creds event listener
+        state.client.ev.on("creds.update", async () => {
             try { await state.saveCreds(); } catch (e) {}
-        }, 2000));
-
-        console.log(`${C.cyan}⏳ Waiting for socket initialization...${C.reset}`);
-        
-        // FIX: Wait for the socket to actually be ready before requesting pairing code
-        await new Promise((resolve) => {
-            const onReady = (update) => {
-                if (update.qr || update.connection === "open" || update.connection === "close") {
-                    state.client.ev.off("connection.update", onReady);
-                    resolve();
-                }
-            };
-            state.client.ev.on("connection.update", onReady);
-            // Backup timeout in case the ready event is missed
-            setTimeout(() => {
-                state.client.ev.off("connection.update", onReady);
-                resolve();
-            }, 7000);
         });
 
-        // Start listening for connection results BEFORE requesting the code to avoid missing events
+        // Wait for websocket handshake to complete
+        await delay(3000);
+
         const connectionPromise = waitForConnection(60000);
 
         let code;
         try {
-            console.log(`${C.cyan}📲 Requesting pairing code...${C.reset}`);
+            console.log(`${C.cyan}📲 Requesting WhatsApp pairing code...${C.reset}`);
             code = await withTimeout(
                 state.client.requestPairingCode(number),
-                15000,
+                20000,
                 "Pairing code request timed out"
             );
-            // Format code cleanly (e.g., XXXX-XXXX)
-            code = code?.match(/.{1,4}/g)?.join('-') || code;
+            code = code?.match(/.{1,4}/g)?.join("-") || code;
         } catch (err) {
             console.error(`${C.red}❌ Could not get pairing code:${C.reset}`, err.message);
             await closeSocket(state.client);
@@ -445,9 +430,8 @@ async function generatePairingCode() {
         console.log(`${C.green}║  🔐 PAIRING CODE: ${C.bold}${C.white}${code}${C.reset}${C.green}  ║${C.reset}`);
         console.log(`${C.green}╚══════════════════════════════════╝${C.reset}`);
         console.log(`${C.yellow}➤ WhatsApp → Linked Devices → Link with phone number${C.reset}`);
-        console.log(`${C.gray}⏳ Waiting up to 60s for connection...\n${C.reset}`);
+        console.log(`${C.gray}⏳ Enter code fast! Waiting up to 60s for connection...\n${C.reset}`);
 
-        // Await the promise we started earlier
         const connected = await connectionPromise;
         state.pairingInProgress = false;
 
@@ -466,12 +450,12 @@ async function generatePairingCode() {
         }
 
         if (attempt < maxAttempts) {
-            console.log(`${C.yellow}🔁 Retrying with a new code...${C.reset}`);
+            console.log(`${C.yellow}🔁 Retrying with a new fresh code...${C.reset}`);
             await delay(2000);
         }
     }
 
-    console.log(`\n${C.red}❌ All pairing attempts failed. Trying QR code fallback...${C.reset}`);
+    console.log(`\n${C.red}❌ Pairing attempts failed. Trying QR fallback...${C.reset}`);
     await fallbackToQR(number, authPath);
 }
 
@@ -492,9 +476,9 @@ async function fallbackToQR(number, authPath) {
         const res = await withSocketLock(() => createSocket(number, authPath, true));
         if (!res) { state.pairingInProgress = false; return; }
 
-        state.client.ev.on("creds.update", debounce(async () => {
+        state.client.ev.on("creds.update", async () => {
             try { await state.saveCreds(); } catch (e) {}
-        }, 2000));
+        });
 
         console.log(`${C.yellow}📱 Scan QR → WhatsApp → Linked Devices → Link a device${C.reset}`);
         console.log(`${C.gray}⏳ Waiting up to 120s...\n${C.reset}`);
@@ -619,7 +603,7 @@ async function sendMessages() {
     } else {
         const normalized = normalizeNumber(rawTarget);
         if (!normalized)
-            return console.log(`${C.red}❌ Invalid number. Use country code (e.g. 923001234567).${C.reset}`);
+            return console.log(`${C.red}❌ Invalid number. Use country code.${C.reset}`);
         jid = `${normalized}@s.whatsapp.net`;
     }
 
