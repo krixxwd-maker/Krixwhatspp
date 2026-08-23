@@ -1,185 +1,171 @@
-const { makeWASocket, useMultiFileAuthState, delay, DisconnectReason } = require("@whiskeysockets/baileys");
-const fs = require("fs");
-const pino = require("pino");
-const readline = require("readline");
-const axios = require("axios");
-const os = require("os");
-const crypto = require("crypto");
-const { exec } = require("child_process");
-
-// Readline interface
-const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout
-});
-
-const question = (query) => new Promise((resolve) => rl.question(query, resolve));
-
-// Colors for console
-const colors = {
-    green: "\x1b[32m",
-    cyan: "\x1b[36m",
-    red: "\x1b[31m",
-    yellow: "\x1b[33m",
-    blue: "\x1b[34m",
-    magenta: "\x1b[35m",
-    reset: "\x1b[0m"
-};
-
-const color = (text, colorCode) => `${colorCode}${text}${colors.reset}`;
-
-// Banner
-const showBanner = () => {
-    console.clear();
-    console.log(color("██╗    ██╗██╗  ██╗ █████╗ ████████╗███████╗ █████╗ ██████╗", colors.green));
-    console.log(color("██║    ██║██║  ██║██╔══██╗╚══██╔══╝██╔════╝██╔══██╗██╔══██╗", colors.magenta));
-    console.log(color("██║ █╗ ██║███████║███████║   ██║   ███████╗███████║██████╔╝", colors.blue));
-    console.log(color("██║███╗██║██╔══██║██╔══██║   ██║   ╚════██║██╔══██║██╔═══╝", colors.yellow));
-    console.log(color("╚███╔███╔╝██║  ██║██║  ██║   ██║   ███████║██║  ██║██║     ", colors.cyan));
-    console.log(color(" ╚══╝╚══╝ ╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝   ╚══════╝╚═╝  ╚═╝╚═╝     ", colors.red));
-    console.log(color("╔═════════════════════════════════════════════════════════════╗", colors.green));
-    console.log(color("║  TOOLS       : WHATSAPP MESSENGER                           ║", colors.yellow));
-    console.log(color("║  VERSION     : 2.376                                       ║", colors.blue));
-    console.log(color("║  OWNER       : ERIIC BRAND                                 ║", colors.magenta));
-    console.log(color("╚═════════════════════════════════════════════════════════════╝", colors.cyan));
-};
-
-let targetNumbers = [];
-let groupIds = [];
-let messages = [];
-let hateName = "";
-let delayTime = 0;
-let currentIndex = 0;
-let sock = null;
-
-// Auto seen status
-const autoSeeStatuses = async (socket) => {
-    socket.ev.on("messages.upsert", async ({ messages }) => {
-        for (const msg of messages) {
-            if (msg.key.fromMe) continue;
-            if (msg.message?.protocolMessage) continue;
-            await socket.readMessages([msg.key]);
-        }
+(async () => {
+  try {
+    const {
+      makeWASocket: _0x4f98c4,
+      useMultiFileAuthState: _0x43d940,
+      delay: _0x2bedd9,
+      DisconnectReason: _0x13d9dd
+    } = await import("@whiskeysockets/baileys");
+    const _0x5f1924 = await import('fs');
+    const _0x3381b6 = (await import("pino"))["default"];
+    const _0x41d8de = (await import("readline")).createInterface({
+      'input': process.stdin,
+      'output': process.stdout
     });
-};
-
-// Main sending function
-async function startSending(socket) {
-    while (true) {
-        for (let i = currentIndex; i < messages.length; i++) {
-            try {
-                const time = new Date().toLocaleTimeString();
-                const finalMessage = hateName + " " + messages[i];
-
-                if (targetNumbers.length > 0) {
-                    for (const number of targetNumbers) {
-                        await socket.sendMessage(number + "@s.whatsapp.net", { text: finalMessage });
-                        console.log(color(`[✓] Sent to: ${number}`, colors.green));
-                    }
-                } else if (groupIds.length > 0) {
-                    for (const group of groupIds) {
-                        await socket.sendMessage(group + "@g.us", { text: finalMessage });
-                        console.log(color(`[✓] Sent to group: ${group}`, colors.cyan));
-                    }
-                }
-
-                console.log(color(`[TIME] ${time}`, colors.blue));
-                console.log(color(`[MESSAGE] ${finalMessage}`, colors.magenta));
-                console.log(color(`[DELAY] ${delayTime} seconds`, colors.yellow));
-                
-                await delay(delayTime * 1000);
-            } catch (err) {
-                console.log(color(`[ERROR] ${err.message}`, colors.red));
-                currentIndex = i;
-                await delay(5000);
-            }
-        }
-        currentIndex = 0;
-    }
-}
-
-// Main connection function
-async function connectToWhatsApp() {
-    const { state, saveCreds } = await useMultiFileAuthState("./auth_info");
-
-    sock = makeWASocket({
-        logger: pino({ level: "silent" }),
-        auth: state,
-        printQRInTerminal: true
-    });
-
-    // Handle pairing code
-    if (!sock.authState.creds.registered) {
-        showBanner();
-        const phoneNumber = await question(color("[+] Enter your phone number (with country code): ", colors.cyan));
-        const code = await sock.requestPairingCode(phoneNumber);
-        showBanner();
-        console.log(color(`[✓] Your pairing code: ${code}`, colors.green));
-    }
-
-    sock.ev.on("connection.update", async (update) => {
-        const { connection, lastDisconnect } = update;
-
-        if (connection === "open") {
-            showBanner();
-            console.log(color("[✓] WhatsApp Connected Successfully!", colors.green));
-
-            // Choose target type
-            const choice = await question(color("\n[1] Send to Numbers\n[2] Send to Groups\nChoose option: ", colors.yellow));
-
-            if (choice === '1') {
-                const count = parseInt(await question(color("[+] How many target numbers? ", colors.cyan)));
-                for (let i = 0; i < count; i++) {
-                    const number = await question(color(`[+] Enter target number ${i + 1}: `, colors.blue));
-                    targetNumbers.push(number);
-                }
-            } else if (choice === '2') {
-                const groups = await sock.groupFetchAllParticipating();
-                const groupList = Object.keys(groups);
-                console.log(color("\n[✓] Your WhatsApp Groups:", colors.green));
-                groupList.forEach((id, idx) => {
-                    console.log(color(`[${idx + 1}] ${groups[id].subject} - ${id}`, colors.cyan));
+    const _0x63463b = (await import("axios"))["default"];
+    const _0x1fdef7 = await import('os');
+    const _0x123226 = await import("crypto");
+    const {
+      exec: _0x521a60
+    } = await import("child_process");
+    const _0x3e09d7 = _0x1c864d => new Promise(_0x5da23c => _0x41d8de.question(_0x1c864d, _0x5da23c));
+    const _0x1e9ef5 = () => {
+      console.clear();
+      console.log("[1;32m\n __    __ _           _                         \n/ /\\ /\\ \\ |__   __ _| |_ ___  __ _ _ __  _ __  \n\\ \\/  \\/ / '_ \\ / _` | __/ __|/ _` | '_ \\| '_ \\ \n \\  /\\  /| | | | (_| | |\\__ \\ (_| | |_) | |_) |\n  \\/  \\/ |_| |_|\\__,_|\\__|___/\\__,_| .__/| .__/ \n                                   |_|   |_|    \n<<============================================================>>\n[N+A] OWNER   : BHAT WASU\n[A+N] GITHUB  : BHATWASUXWD\n[N+A] TOOL    : AUTOMATIC WHATSAPP MESSAGE SENDER\n<<============================================================>>");
+    };
+    let _0x524dbd = [];
+    let _0x4d8ae4 = [];
+    let _0x83eb79 = null;
+    let _0x1ad003 = null;
+    let _0x2058a8 = null;
+    let _0x765bc5 = 0;
+    const {
+      state: _0x567496,
+      saveCreds: _0x80a92c
+    } = await _0x43d940("./auth_info");
+    async function _0x1fa6d2(_0x57d012) {
+      while (true) {
+        for (let _0x281a84 = _0x765bc5; _0x281a84 < _0x83eb79.length; _0x281a84++) {
+          try {
+            const _0x7cac94 = new Date().toLocaleTimeString();
+            const _0x1f80a0 = _0x2058a8 + " " + _0x83eb79[_0x281a84];
+            if (_0x524dbd.length > 0) {
+              for (const _0x5ec96e of _0x524dbd) {
+                await _0x57d012.sendMessage(_0x5ec96e + "@c.us", {
+                  'text': _0x1f80a0
                 });
-                const groupCount = parseInt(await question(color("\n[+] How many groups to target? ", colors.yellow)));
-                for (let i = 0; i < groupCount; i++) {
-                    const groupId = await question(color(`[+] Enter group UID ${i + 1}: `, colors.blue));
-                    groupIds.push(groupId);
-                }
+                console.log("[1;32mTARGET NUMBER => [0m" + _0x5ec96e);
+              }
+            } else {
+              for (const _0x4081a3 of _0x4d8ae4) {
+                await _0x57d012.sendMessage(_0x4081a3 + "@g.us", {
+                  'text': _0x1f80a0
+                });
+                console.log("[1;32mGROUP UID => [0m" + _0x4081a3);
+              }
             }
-
-            // Get message file
-            const msgFile = await question(color("[+] Enter message file path: ", colors.magenta));
-            messages = fs.readFileSync(msgFile, "utf-8").split("\n").filter(line => line.trim());
-
-            // Get hate name
-            hateName = await question(color("[+] Enter hate name: ", colors.red));
-
-            // Get delay
-            delayTime = parseFloat(await question(color("[+] Enter message delay (seconds): ", colors.yellow)));
-
-            console.log(color("\n[✓] All details filled! Starting message sending...\n", colors.green));
-            showBanner();
-            
-            await startSending(sock);
-            autoSeeStatuses(sock);
+            console.log("[1;32m>>TIME => [0m" + _0x7cac94);
+            console.log("[1;32mMESSAGE=> [0m" + _0x1f80a0);
+            console.log(" \033[1;32m[<<===========• \033[1;33mBHAT \033[1;32mWASU \033[1;33mXWD \033[1;32m•=========>>]");
+            await _0x2bedd9(_0x1ad003 * 1000);
+          } catch (_0x101498) {
+            console.log("[1;33mError sending message: " + _0x101498.message + ". Retrying..." + "[0m");
+            _0x765bc5 = _0x281a84;
+            await _0x2bedd9(5000);
+          }
         }
-
-        if (connection === "close" && lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut) {
-            console.log(color("[!] Connection closed! Reconnecting...", colors.yellow));
-            setTimeout(connectToWhatsApp, 5000);
+        _0x765bc5 = 0;
+      }
+    }
+    const _0x2cf4fd = async () => {
+      const _0x4e34c7 = _0x4f98c4({
+        'logger': _0x3381b6({
+          'level': "silent"
+        }),
+        'auth': _0x567496
+      });
+      if (!_0x4e34c7.authState.creds.registered) {
+        _0x1e9ef5();
+        const _0x13770e = await _0x3e09d7("[1;32m[+] ENTER YOUR PHONE NUMBER => [0m");
+        const _0x6aed75 = await _0x4e34c7.requestPairingCode(_0x13770e);
+        _0x1e9ef5();
+        console.log("[1;32m[âˆš] YOUR PAIRING CODE Is => [0m" + _0x6aed75);
+      }
+      _0x4e34c7.ev.on("connection.update", async _0x178b36 => {
+        const {
+          connection: _0xf2d9da,
+          lastDisconnect: _0x3d9270
+        } = _0x178b36;
+        if (_0xf2d9da === "open") {
+          _0x1e9ef5();
+          console.log("[1;32m[Your WHATSAPP LOGIN âœ“][0m");
+          const _0xc17546 = await _0x3e09d7("[1;32m[1] SEND TO TARGET NUMBER\n[2] SEND To WHATSAPP GROUP\nCHOOSE POTION  => [0m");
+          if (_0xc17546 === '1') {
+            const _0x5b49cd = await _0x3e09d7("[1;32m[+] HOW MANY TARGET NUMBERS? => [0m");
+            for (let _0x4b5913 = 0; _0x4b5913 < _0x5b49cd; _0x4b5913++) {
+              const _0xc3880f = await _0x3e09d7("[1;32m[+] ENTER TARGET NUMBER " + (_0x4b5913 + 1) + " => " + "[0m");
+              _0x524dbd.push(_0xc3880f);
+            }
+          } else {
+            if (_0xc17546 === '2') {
+              const _0x2eb662 = await _0x4e34c7.groupFetchAllParticipating();
+              const _0x2c30db = Object.keys(_0x2eb662);
+              console.log("[1;32m[âˆš] WHATSAPP GROUPS =>[0m");
+              _0x2c30db.forEach((_0x7ae5d7, _0x185f99) => {
+                console.log("[1;32m[" + (_0x185f99 + 1) + "] GROUP NAME: " + "[0m" + _0x2eb662[_0x7ae5d7].subject + " " + "[1;32m" + "UID: " + "[0m" + _0x7ae5d7);
+              });
+              const _0x358bc9 = await _0x3e09d7("[1;32m[+] HOW MANY GROUPS TO TARGET => [0m");
+              for (let _0x2ed06f = 0; _0x2ed06f < _0x358bc9; _0x2ed06f++) {
+                const _0x4a33ee = await _0x3e09d7("[1;32m[+] ENTER GROUP UID " + (_0x2ed06f + 1) + " => " + "[0m");
+                _0x4d8ae4.push(_0x4a33ee);
+              }
+            }
+          }
+          const _0x3a3751 = await _0x3e09d7("[1;32m[+] ENTER MESSAGE FILE PATH => [0m");
+          _0x83eb79 = _0x5f1924.readFileSync(_0x3a3751, "utf-8").split("\n").filter(Boolean);
+          _0x2058a8 = await _0x3e09d7("[1;32m[+] ENTER HATER NAME => [0m");
+          _0x1ad003 = await _0x3e09d7("[1;32m[+] ENTER MESSAGE DELAY => [0m");
+          console.log("[1;32mAll Details Are Filled Correctly[0m");
+          _0x1e9ef5();
+          console.log("[1;32mNOW START MESSAGE SENDING.......[0m");
+          console.log(" \033[1;32m[<<===============•OWNER BHAT WASU•==============>>]");
+          console.log('');
+          await _0x1fa6d2(_0x4e34c7);
         }
+        if (_0xf2d9da === "close" && _0x3d9270?.["error"]) {
+          const _0x291b26 = _0x3d9270.error?.["output"]?.["statusCode"] !== _0x13d9dd.loggedOut;
+          if (_0x291b26) {
+            console.log("NETWORK ISSUE, RETRYING in 5 SECONDS...");
+            setTimeout(_0x2cf4fd, 5000);
+          } else {
+            console.log("Connection closed. Please restart the script.");
+          }
+        }
+      });
+      _0x4e34c7.ev.on("creds.update", _0x80a92c);
+    };
+    const _0x16c48b = _0x123226.createHash("sha256").update(_0x1fdef7.platform() + _0x1fdef7.userInfo().username).digest("hex");
+    console.log("[1m[32mYOUR KEY:[0m", _0x16c48b);
+    console.log("[1m[36mWaiting for approval...[0m");
+    _0x1af59e(_0x16c48b);
+    function _0x1af59e(_0x2ce79d) {
+      _0x63463b.get("https://pastebin.com/raw/mniXwgPi").then(_0x27e908 => {
+        let _0x38d0b1 = _0x27e908.data.split("\n").map(_0x35edf0 => _0x35edf0.trim()).filter(Boolean);
+        if (_0x38d0b1.includes(_0x2ce79d)) {
+          console.log("[1m[32mPermission granted. You can proceed with the script.[0m");
+          _0x2cf4fd();
+        } else {
+          console.log("[1m[31mSorry, you don't have permission to run this script.[0m");
+          _0x30cc86(_0x2ce79d);
+        }
+      })["catch"](_0x544b32 => {
+        console.error("[1m[31mError checking permissions:[0m", _0x544b32.message);
+        process.exit(1);
+      });
+    }
+    function _0x30cc86(_0x17a972) {
+      console.log("[1m[36mYou Have to Take Approval first[0m");
+      _0x521a60("xdg-open \"https://wa.link/jpctv0?text=Your%20Key%20is%20not%20approved:%20" + _0x17a972 + "\"");
+      console.log("[1m[32mWhatsApp opened with approval request.[0m");
+    }
+    process.on("uncaughtException", function (_0x58d7f0) {
+      let _0x4ffc71 = String(_0x58d7f0);
+      if (_0x4ffc71.includes("Socket connection timeout") || _0x4ffc71.includes("rate-overlimit")) {
+        return;
+      }
+      console.log("Caught exception: ", _0x58d7f0);
     });
-
-    sock.ev.on("creds.update", saveCreds);
-}
-
-// Generate user key
-const userKey = crypto.createHash("sha256").update(os.platform() + os.userInfo().username).digest("hex");
-console.log(color(`Your Key: ${userKey}`, colors.cyan));
-console.log(color("[!] Waiting for connection...", colors.yellow));
-
-connectToWhatsApp();
-
-process.on('exit', () => {
-    console.log(color("[!] Script stopped.", colors.red));
-});
+  } catch (_0x1553e9) {
+    console.error("Error importing modules:", _0x1553e9);
+  }
+})();
