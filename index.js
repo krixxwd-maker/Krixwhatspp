@@ -262,10 +262,11 @@ async function createSocket(number, authPath, qr = false) {
         },
         printQRInTerminal: qr,
         logger,
-        browser:         Browsers.windows("Chrome"),
-        syncFullHistory: false,
-        shouldIgnoreJid: jid => isJidBroadcast(jid),
-        getMessage:      async () => ({})
+        browser:              Browsers.ubuntu("Chrome"),
+        syncFullHistory:      false,
+        markOnlineOnConnect:  false,
+        shouldIgnoreJid:      jid => isJidBroadcast(jid),
+        getMessage:           async () => ({})
     });
 
     state.client          = client;
@@ -454,7 +455,24 @@ async function generatePairingCode() {
             return;
         }
 
-        await delay(1000);
+        // ✅ Fix: Socket ka pehla update aane tak wait karo
+        // (delay(1000) kafi nahi tha — socket ready se pehle code maang leta tha)
+        console.log("⏳ Socket ready hone ka wait...");
+        await withTimeout(
+            new Promise(resolve => {
+                const init = () => {
+                    state.client.ev.removeListener("connection.update", init);
+                    resolve();
+                };
+                state.client.ev.once("connection.update", init);
+            }),
+            8000,
+            "Socket init timeout"
+        ).catch(() => {
+            // Agar 8s mein update nahi aaya toh bhi aage badho
+        });
+
+        await delay(500); // small buffer
 
         // Request pairing code
         let code;
@@ -473,11 +491,18 @@ async function generatePairingCode() {
             continue;
         }
 
-        console.log("\n  ╔══════════════════════════════════╗");
-        console.log(`  ║  🔐 PAIRING CODE:  ${code.padEnd(14)} ║`);
-        console.log("  ╚══════════════════════════════════╝");
-        console.log("  WhatsApp → Linked Devices → Link with phone number");
-        console.log("  ⏳ Waiting for connection (60s)...\n");
+        // Format: KRIX-WXYZ style agar code 8 chars hai
+        const formatted = code && code.length === 8
+            ? `${code.slice(0,4)}-${code.slice(4)}`
+            : code;
+
+        console.log("\n  ╔══════════════════════════════════════╗");
+        console.log(`  ║   🔐 PAIRING CODE:  ${(formatted || "").padEnd(13)} ║`);
+        console.log("  ╠══════════════════════════════════════╣");
+        console.log("  ║  WhatsApp > Linked Devices >          ║");
+        console.log("  ║  Link with phone number > Enter Code  ║");
+        console.log("  ╚══════════════════════════════════════╝");
+        console.log("  ⏳ Code enter karo (90s mein)...\n");
 
         state.pairing = true;
 
@@ -498,15 +523,20 @@ async function generatePairingCode() {
                             state.client.ev.removeListener("connection.update", onUpdate);
                             resolve();
                         } else if (update.connection === "close") {
-                            state.client.ev.removeListener("connection.update", onUpdate);
-                            reject(new Error("Connection closed during pairing"));
+                            const code = update.lastDisconnect?.error?.output?.statusCode;
+                            // Auth failure = reject, otherwise ignore (might reconnect)
+                            if (isAuthFailure(code, update.lastDisconnect?.error?.message)) {
+                                state.client.ev.removeListener("connection.update", onUpdate);
+                                reject(new Error(`Auth failed during pairing (code=${code})`));
+                            }
+                            // else: ignore close, keep waiting — WA sometimes disconnects briefly
                         }
                     };
                     state.client.ev.on("connection.update", onUpdate);
                     state.client.ev.once("creds.update", credsHandler);
                 }),
-                62000,
-                "Pairing timeout — code expired"
+                95000,
+                "Pairing timeout — code expired ya enter nahi kiya"
             );
 
             // Success
