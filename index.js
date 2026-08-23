@@ -22,15 +22,26 @@ const {
 
 const MAX_RECONNECT_ATTEMPTS = 10;
 const DR = DisconnectReason || {
-    loggedOut:           401,
-    forbidden:           403,
-    connectionClosed:    408,
-    connectionLost:      408,
-    connectionReplaced:  440,
-    timedOut:            408,
-    badSession:          500,
-    restartRequired:     515,
+    loggedOut: 401,
+    forbidden: 403,
+    connectionClosed: 408,
+    connectionLost: 408,
+    connectionReplaced: 440,
+    timedOut: 408,
+    badSession: 500,
+    restartRequired: 515,
     multideviceMismatch: 411
+};
+
+const C = {
+    reset:  "\x1b[0m",
+    bold:   "\x1b[1m",
+    green:  "\x1b[92m",
+    cyan:   "\x1b[96m",
+    yellow: "\x1b[93m",
+    red:    "\x1b[91m",
+    white:  "\x1b[97m",
+    gray:   "\x1b[90m"
 };
 
 const logger = pino({ level: "fatal" });
@@ -38,29 +49,6 @@ const logger = pino({ level: "fatal" });
 ["temp", "backups"].forEach(dir => {
     if (!fs.existsSync(dir)) fs.mkdirSync(dir);
 });
-
-// ============================================================
-//  EVENT HELPERS — Baileys ke liye safe versions
-// ============================================================
-
-// Kisi bhi event emitter se listener hatao — off / removeListener dono try karta hai
-function safeRemoveListener(emitter, event, listener) {
-    try { emitter.off?.(event, listener); } catch (_) {}
-    try { emitter.removeListener?.(event, listener); } catch (_) {}
-}
-
-// once() ka safe version: on() use karta hai, fir khud ko cleanup kar leta hai
-function safeOnce(emitter, event, handler) {
-    const wrapped = (...args) => {
-        cleanup();
-        handler(...args);
-    };
-    function cleanup() {
-        safeRemoveListener(emitter, event, wrapped);
-    }
-    emitter.on(event, wrapped);
-    return cleanup;  // manual cleanup ke liye bhi return karta hai
-}
 
 // ============================================================
 //  GLOBAL STATE
@@ -79,7 +67,6 @@ const state = {
     lastError:         null,
     saveCreds:         null,
     credsRegistered:   false,
-    pairing:           false,
     pairingInProgress: false
 };
 
@@ -129,24 +116,12 @@ function normalizeNumber(input) {
     return n;
 }
 
-function buildJid(rawTarget) {
-    let jid = rawTarget.replace(/\s/g, "");
-    if (jid.includes("@")) return jid;                   // already a JID
-    const clean = jid.replace(/[^0-9\-]/g, "");
-    if (clean.includes("-") || clean.length > 15) {      // group ID
-        return `${clean}@g.us`;
-    }
-    let num = clean;
-    if (num.startsWith("00")) num = num.slice(2);
-    return `${num}@s.whatsapp.net`;
-}
-
 function backupAuth() {
     if (!state.authPath) return;
     try {
         const dest = path.join("backups", `${path.basename(state.authPath)}_${Date.now()}`);
         fs.cpSync(state.authPath, dest, { recursive: true, force: true });
-        console.log(`💾 Auth backup done: ${dest}`);
+        console.log(`${C.gray}💾 Auth backup: ${dest}${C.reset}`);
     } catch (e) {
         console.error("Backup failed:", e.message);
     }
@@ -156,102 +131,33 @@ function closeSocket(client = state.client, timeout = 2500) {
     return new Promise(resolve => {
         if (!client) return resolve();
         let settled = false;
-        const done = () => { if (!settled) { settled = true; resolve(); } };
-        try { client.ev.removeAllListeners?.("connection.update"); } catch (_) {}
-        try { client.ev.removeAllListeners?.("creds.update"); }      catch (_) {}
-        try {
-            client.ev.on("connection.update", u => {
-                if (u.connection === "close") done();
-            });
-        } catch (_) {}
-        try { client.end(); } catch (_) {}
+        const done  = () => { if (!settled) { settled = true; resolve(); } };
+        try { client.ev.removeAllListeners(); } catch (e) {}
+        try { client.end(); }                  catch (e) {}
         setTimeout(done, timeout);
     });
 }
 
 async function withSocketLock(fn) {
     while (socketLockPromise) {
-        try { await socketLockPromise; } catch (_) {}
+        try { await socketLockPromise; } catch (e) {}
     }
     const p = (async () => fn())();
     socketLockPromise = p;
-    try     { return await p; }
+    try   { return await p; }
     finally { if (socketLockPromise === p) socketLockPromise = null; }
 }
 
-function isAuthFailure(code, msg) {
+function isAuthFailure(statusCode, errMsg) {
     return (
-        code === DR.loggedOut          ||
-        code === DR.forbidden          ||
-        code === DR.multideviceMismatch||
-        code === DR.badSession         ||
-        code === DR.connectionReplaced ||
+        statusCode === DR.loggedOut          ||
+        statusCode === DR.forbidden          ||
+        statusCode === DR.multideviceMismatch||
+        statusCode === DR.badSession         ||
+        statusCode === DR.connectionReplaced ||
         /logout|logged out|invalid auth|401|403|bad session|multidevice mismatch|connection replaced/i
-            .test(msg || "")
+            .test(errMsg || "")
     );
-}
-
-// ============================================================
-//  BANNER
-// ============================================================
-
-function showBanner() {
-    const C = "\x1b[36m"; // cyan
-    const G = "\x1b[32m"; // green
-    const Y = "\x1b[33m"; // yellow
-    const R = "\x1b[0m";  // reset
-
-    console.log(C + "");
-    console.log("  ╔═══════════════════════════════════════════════╗");
-    console.log("  ║  ██╗  ██╗██████╗ ██╗██╗  ██╗               ║");
-    console.log("  ║  ██║ ██╔╝██╔══██╗██║╚██╗██╔╝               ║");
-    console.log("  ║  █████╔╝ ██████╔╝██║ ╚███╔╝                ║");
-    console.log("  ║  ██╔═██╗ ██╔══██╗██║ ██╔██╗                ║");
-    console.log("  ║  ██║  ██╗██║  ██║██║██╔╝ ██╗               ║");
-    console.log("  ║  ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝╚═╝  ╚═╝               ║");
-    console.log("  ╠═══════════════════════════════════════════════╣");
-    console.log(G + "  ║  🔥 WhatsApp Tool   │  Powered by Baileys   " + C + "║");
-    console.log(G + "  ║  📱 Termux CLI      │  Auto-Reconnect v2.0  " + C + "║");
-    console.log(Y + "  ║  ⚡ Multi-Session   │  Pairing + QR Mode    " + C + "║");
-    console.log("  ╚═══════════════════════════════════════════════╝" + R);
-    console.log("");
-}
-
-// ============================================================
-//  MENU
-// ============================================================
-
-async function showMenu() {
-    const connected = state.connected;
-    const dot   = connected ? "\x1b[32m●\x1b[0m" : "\x1b[31m●\x1b[0m";
-    const label = connected ? "\x1b[32mCONNECTED\x1b[0m" : "\x1b[31mDISCONNECTED\x1b[0m";
-    const num   = state.number ? ` (${state.number})` : "";
-    const task  = currentTask && currentTask.isRunning
-        ? `\x1b[33m▶ Task running → sent: ${currentTask.sent}\x1b[0m`
-        : "";
-
-    console.log("\x1b[33m");
-    console.log("  ╔══════════════════════════════════╗");
-    console.log(`  ║  ${dot} ${label}${num}`);
-    if (task) console.log(`  ║  ${task}`);
-    console.log("  ╠══════════════════════════════════╣");
-    console.log("  ║  1. Pair / Restore Session       ║");
-    console.log("  ║  2. Send Messages (Bulk)         ║");
-    console.log("  ║  3. Show Groups                  ║");
-    console.log("  ║  4. Stop Current Task            ║");
-    console.log("  ║  5. Logout / Delete Session      ║");
-    console.log("  ║  6. Exit                         ║");
-    console.log("  ╚══════════════════════════════════╝");
-    console.log("\x1b[0m");
-}
-
-// ============================================================
-//  CLI
-// ============================================================
-
-const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-function ask(q) {
-    return new Promise(resolve => rl.question(q, resolve));
 }
 
 // ============================================================
@@ -259,14 +165,19 @@ function ask(q) {
 // ============================================================
 
 async function createSocket(number, authPath, qr = false) {
-    const old = state.client;
-    if (old) { state.client = null; await closeSocket(old); }
+    const oldClient = state.client;
+    if (oldClient) {
+        state.client = null;
+        await closeSocket(oldClient);
+    }
 
     if (!fs.existsSync(authPath)) fs.mkdirSync(authPath, { recursive: true });
 
     let authState, saveCreds;
     try {
-        ({ state: authState, saveCreds } = await useMultiFileAuthState(authPath));
+        const loaded = await useMultiFileAuthState(authPath);
+        authState  = loaded.state;
+        saveCreds  = loaded.saveCreds;
     } catch (e) {
         state.authRequired = true;
         state.lastError    = `AUTH_READ_FAILED: ${e.message}`;
@@ -274,8 +185,8 @@ async function createSocket(number, authPath, qr = false) {
     }
 
     let version;
-    try { ({ version } = await fetchLatestBaileysVersion()); }
-    catch (_) { version = [2, 3000, 0]; }
+    try   { ({ version } = await fetchLatestBaileysVersion()); }
+    catch (e) { version = [2, 3000, 0]; }
 
     const client = makeWASocket({
         version,
@@ -285,26 +196,29 @@ async function createSocket(number, authPath, qr = false) {
         },
         printQRInTerminal: qr,
         logger,
-        browser:              Browsers.ubuntu("Chrome"),
-        syncFullHistory:      false,
-        markOnlineOnConnect:  false,
-        shouldIgnoreJid:      jid => isJidBroadcast(jid),
-        getMessage:           async () => ({})
+        browser:          Browsers.windows("Chrome"),
+        syncFullHistory:  false,
+        shouldIgnoreJid:  jid => isJidBroadcast(jid),
+        getMessage:       async () => ({})
     });
 
     state.client          = client;
     state.saveCreds       = saveCreds;
     state.credsRegistered = !!(authState.creds && authState.creds.registered);
+
     return { client, state: authState, saveCreds };
 }
 
 // ============================================================
-//  HANDLERS
+//  REGISTER PERSISTENT HANDLERS
 // ============================================================
 
 function registerHandlers() {
     const client = state.client;
     if (!client) return;
+
+    client.ev.removeAllListeners("creds.update");
+    client.ev.removeAllListeners("connection.update");
 
     client.ev.on("creds.update", debounce(async () => {
         try { await state.saveCreds(); }
@@ -323,30 +237,24 @@ async function handleConnectionUpdate(update) {
         state.authRequired      = false;
         state.loggedOut         = false;
         state.lastError         = null;
-        state.pairing           = false;
-        state.pairingInProgress = false;
-        if (isNewLogin) console.log("🔑 New login established!");
-        console.log("✅ Connected!");
+        if (isNewLogin) console.log(`${C.yellow}🔑 New login established!${C.reset}`);
+        console.log(`${C.green}✅ Connected!${C.reset}`);
         return;
     }
 
     if (connection === "close") {
         state.connected = false;
-        const code   = lastDisconnect?.error?.output?.statusCode;
-        const errMsg = lastDisconnect?.error?.message || "";
-        state.lastError = errMsg || `Connection closed (code=${code})`;
-        console.log(`❌ Connection closed — code=${code}  reason=${errMsg}`);
+        const statusCode = lastDisconnect?.error?.output?.statusCode;
+        const errMsg     = lastDisconnect?.error?.message || "";
+        state.lastError  = errMsg || `Connection closed (code=${statusCode})`;
+        console.log(`${C.red}❌ Disconnected — code=${statusCode} reason=${errMsg}${C.reset}`);
 
-        if (state.pairingInProgress) {
-            console.log("⏳ Pairing interrupted...");
-            return;
-        }
-        if (state.stopReconnect) return;
+        if (state.stopReconnect || state.pairingInProgress) return;
 
-        if (isAuthFailure(code, errMsg)) {
+        if (isAuthFailure(statusCode, errMsg)) {
             state.loggedOut    = true;
             state.authRequired = true;
-            console.log("🔐 Auth invalid. Use option 5 to delete session, then pair again.");
+            console.log(`${C.yellow}🔐 Auth invalid. Use option 5 to delete session and pair again.${C.reset}`);
             return;
         }
 
@@ -355,53 +263,260 @@ async function handleConnectionUpdate(update) {
 }
 
 // ============================================================
-//  AUTO-RECONNECT
+//  RECONNECT
 // ============================================================
 
 async function attemptReconnect() {
     if (state.pairingInProgress || state.stopReconnect ||
-        state.loggedOut || state.reconnecting || socketLockPromise) return;
+        state.loggedOut          || state.reconnecting) return;
 
     state.reconnecting = true;
     try {
-        const old = state.client;
-        if (old) { state.client = null; await closeSocket(old); }
-
-        if (state.stopReconnect || state.loggedOut || state.pairingInProgress) return;
+        if (state.client) {
+            const old   = state.client;
+            state.client = null;
+            await closeSocket(old);
+        }
 
         state.reconnectAttempts++;
         if (state.reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
-            console.error("⛔ Max reconnect attempts reached.");
+            console.error(`${C.red}⛔ Max reconnect attempts reached.${C.reset}`);
             return;
         }
 
         const backoff = Math.min(20000, 1000 * Math.pow(2, state.reconnectAttempts - 1));
-        console.log(`🔄 Reconnecting in ${(backoff / 1000).toFixed(1)}s (attempt ${state.reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`);
+        console.log(`${C.cyan}🔄 Reconnecting in ${(backoff/1000).toFixed(1)}s ` +
+                    `(attempt ${state.reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...${C.reset}`);
         await delay(backoff);
 
         if (state.stopReconnect || state.loggedOut || state.pairingInProgress) return;
 
         backupAuth();
-
         const res = await withSocketLock(() => createSocket(state.number, state.authPath));
         if (!res) return;
+
         registerHandlers();
-        console.log("✅ Socket recreated.");
+        console.log(`${C.green}✅ Socket recreated.${C.reset}`);
     } catch (e) {
-        console.error("❌ Reconnect failed:", e.message);
+        console.error(`${C.red}❌ Reconnect failed:${C.reset}`, e.message);
         if (/AUTH_READ_FAILED|Bad file|ENOENT|Invalid key/i.test(e.message)) {
             state.authRequired = true;
             return;
         }
-        if (state.reconnectAttempts < MAX_RECONNECT_ATTEMPTS)
+        if (state.reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
             setTimeout(() => attemptReconnect(), 5000);
+        }
     } finally {
         state.reconnecting = false;
     }
 }
 
 // ============================================================
-//  AUTO-RESTORE SESSION
+//  WAIT FOR CONNECTION HELPER
+// ============================================================
+
+function waitForConnection(timeoutMs) {
+    return new Promise(resolve => {
+        let done = false;
+
+        const onUpdate = (update) => {
+            if (done) return;
+            if (update.connection === "open") {
+                done = true;
+                try { state.client.ev.off("connection.update", onUpdate); } catch (e) {}
+                resolve(true);
+            } else if (update.connection === "close") {
+                done = true;
+                try { state.client.ev.off("connection.update", onUpdate); } catch (e) {}
+                resolve(false);
+            }
+        };
+
+        state.client.ev.on("connection.update", onUpdate);
+
+        setTimeout(() => {
+            if (!done) {
+                done = true;
+                try { state.client.ev.off("connection.update", onUpdate); } catch (e) {}
+                resolve(false);
+            }
+        }, timeoutMs);
+    });
+}
+
+// ============================================================
+//  PAIRING CODE (FIXED)
+// ============================================================
+
+async function generatePairingCode() {
+    const input  = await ask(`${C.cyan}Enter WhatsApp number (with country code, no +/spaces): ${C.reset}`);
+    const number = normalizeNumber(input);
+
+    if (!number) {
+        console.log(`${C.red}❌ Invalid number. Example: 923001234567${C.reset}`);
+        return;
+    }
+
+    if (state.client && state.connected) {
+        console.log(`${C.yellow}⚠️  Already connected. Use option 5 to logout first.${C.reset}`);
+        return;
+    }
+
+    if (state.client) {
+        const old   = state.client;
+        state.client = null;
+        await closeSocket(old);
+    }
+
+    const authPath = getAuthPath(number);
+    state.number   = number;
+    state.authPath = authPath;
+
+    const maxAttempts = 3;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        console.log(`\n${C.cyan}🔄 Attempt ${attempt}/${maxAttempts} – Creating socket...${C.reset}`);
+
+        state.pairingInProgress = true;
+        state.connected         = false;
+
+        try {
+            const res = await withSocketLock(() => createSocket(number, authPath, false));
+            if (!res) { state.pairingInProgress = false; continue; }
+        } catch (err) {
+            console.error(`${C.red}❌ Socket error:${C.reset}`, err.message);
+            state.pairingInProgress = false;
+            await delay(3000);
+            continue;
+        }
+
+        if (state.credsRegistered) {
+            console.log(`${C.yellow}ℹ️  Already registered. Use option 5 to logout first.${C.reset}`);
+            state.pairingInProgress = false;
+            return;
+        }
+
+        // Setup temporary creds saver
+        state.client.ev.on("creds.update", debounce(async () => {
+            try { await state.saveCreds(); } catch (e) {}
+        }, 2000));
+
+        console.log(`${C.cyan}⏳ Waiting for socket initialization...${C.reset}`);
+        
+        // FIX: Wait for the socket to actually be ready before requesting pairing code
+        await new Promise((resolve) => {
+            const onReady = (update) => {
+                if (update.qr || update.connection === "open" || update.connection === "close") {
+                    state.client.ev.off("connection.update", onReady);
+                    resolve();
+                }
+            };
+            state.client.ev.on("connection.update", onReady);
+            // Backup timeout in case the ready event is missed
+            setTimeout(() => {
+                state.client.ev.off("connection.update", onReady);
+                resolve();
+            }, 7000);
+        });
+
+        // Start listening for connection results BEFORE requesting the code to avoid missing events
+        const connectionPromise = waitForConnection(60000);
+
+        let code;
+        try {
+            console.log(`${C.cyan}📲 Requesting pairing code...${C.reset}`);
+            code = await withTimeout(
+                state.client.requestPairingCode(number),
+                15000,
+                "Pairing code request timed out"
+            );
+            // Format code cleanly (e.g., XXXX-XXXX)
+            code = code?.match(/.{1,4}/g)?.join('-') || code;
+        } catch (err) {
+            console.error(`${C.red}❌ Could not get pairing code:${C.reset}`, err.message);
+            await closeSocket(state.client);
+            state.client          = null;
+            state.pairingInProgress = false;
+            if (attempt < maxAttempts) { await delay(3000); continue; }
+            break;
+        }
+
+        console.log(`\n${C.green}╔══════════════════════════════════╗${C.reset}`);
+        console.log(`${C.green}║  🔐 PAIRING CODE: ${C.bold}${C.white}${code}${C.reset}${C.green}  ║${C.reset}`);
+        console.log(`${C.green}╚══════════════════════════════════╝${C.reset}`);
+        console.log(`${C.yellow}➤ WhatsApp → Linked Devices → Link with phone number${C.reset}`);
+        console.log(`${C.gray}⏳ Waiting up to 60s for connection...\n${C.reset}`);
+
+        // Await the promise we started earlier
+        const connected = await connectionPromise;
+        state.pairingInProgress = false;
+
+        if (connected && state.client) {
+            state.connected    = true;
+            state.loggedOut    = false;
+            state.authRequired = false;
+            console.log(`${C.green}✅ Pairing successful! WhatsApp connected.${C.reset}`);
+            registerHandlers(); 
+            return;
+        }
+
+        if (state.client) {
+            await closeSocket(state.client);
+            state.client = null;
+        }
+
+        if (attempt < maxAttempts) {
+            console.log(`${C.yellow}🔁 Retrying with a new code...${C.reset}`);
+            await delay(2000);
+        }
+    }
+
+    console.log(`\n${C.red}❌ All pairing attempts failed. Trying QR code fallback...${C.reset}`);
+    await fallbackToQR(number, authPath);
+}
+
+// ============================================================
+//  QR FALLBACK
+// ============================================================
+
+async function fallbackToQR(number, authPath) {
+    if (state.client) {
+        await closeSocket(state.client);
+        state.client = null;
+    }
+
+    console.log(`${C.cyan}🔄 Starting QR mode...${C.reset}`);
+    state.pairingInProgress = true;
+
+    try {
+        const res = await withSocketLock(() => createSocket(number, authPath, true));
+        if (!res) { state.pairingInProgress = false; return; }
+
+        state.client.ev.on("creds.update", debounce(async () => {
+            try { await state.saveCreds(); } catch (e) {}
+        }, 2000));
+
+        console.log(`${C.yellow}📱 Scan QR → WhatsApp → Linked Devices → Link a device${C.reset}`);
+        console.log(`${C.gray}⏳ Waiting up to 120s...\n${C.reset}`);
+
+        const connected         = await waitForConnection(120000);
+        state.pairingInProgress = false;
+
+        if (connected && state.client) {
+            state.connected = true;
+            console.log(`${C.green}✅ QR scan successful! Connected.${C.reset}`);
+            registerHandlers();
+        } else {
+            console.log(`${C.red}❌ QR scan failed or timed out.${C.reset}`);
+        }
+    } catch (err) {
+        console.error(`${C.red}❌ QR mode error:${C.reset}`, err.message);
+        state.pairingInProgress = false;
+    }
+}
+
+// ============================================================
+//  AUTO RESTORE
 // ============================================================
 
 async function tryRestoreSession() {
@@ -409,7 +524,8 @@ async function tryRestoreSession() {
     if (!authPath) return;
 
     const number = path.basename(authPath).replace(/^auth_/, "");
-    console.log(`🔄 Found saved session for ${number}. Restoring...`);
+    console.log(`${C.cyan}🔄 Found saved session for ${number}. Restoring...${C.reset}`);
+
     state.number   = number;
     state.authPath = authPath;
 
@@ -423,233 +539,15 @@ async function tryRestoreSession() {
             await delay(1000);
         }
 
-        if (state.connected)         console.log("✅ Session restored and connected.");
-        else if (state.authRequired) console.log("⚠️ Session invalid. Use option 1 to pair again.");
-        else                         console.log("🔄 Waiting for auto-reconnect...");
+        if (state.connected) {
+            console.log(`${C.green}✅ Session restored and connected.${C.reset}`);
+        } else if (state.authRequired) {
+            console.log(`${C.yellow}⚠️  Session invalid. Use option 1 to pair again.${C.reset}`);
+        } else {
+            console.log(`${C.gray}🔄 Connecting in background...${C.reset}`);
+        }
     } catch (e) {
-        console.error("❌ Restore failed:", e.message);
-    }
-}
-
-// ============================================================
-//  PAIRING
-// ============================================================
-
-async function generatePairingCode() {
-    const input  = await ask("Enter WhatsApp number (with country code): ");
-    const number = normalizeNumber(input);
-    if (!number) {
-        console.log("❌ Invalid number. Example: 923001234567");
-        return;
-    }
-
-    const authPath = getAuthPath(number);
-    state.number   = number;
-    state.authPath = authPath;
-
-    if (state.client && state.connected) {
-        console.log("⚠️ Already connected. Use option 5 to logout first.");
-        return;
-    }
-    if (state.client) { await closeSocket(state.client); state.client = null; }
-
-    const MAX_PAIR = 3;
-    for (let attempt = 1; attempt <= MAX_PAIR; attempt++) {
-        if (attempt > 1) console.log(`\n🔄 Retry ${attempt}/${MAX_PAIR}...`);
-
-        state.pairingInProgress = true;
-        state.pairing           = false;
-
-        // Create socket
-        try {
-            const res = await withSocketLock(() => createSocket(number, authPath, false));
-            if (!res) { state.pairingInProgress = false; continue; }
-        } catch (e) {
-            console.error("❌ Socket failed:", e.message);
-            state.pairingInProgress = false;
-            if (attempt >= MAX_PAIR) break;
-            await delay(3000);
-            continue;
-        }
-
-        if (state.credsRegistered) {
-            console.log("ℹ️ Session already registered. Use option 5 to logout first.");
-            state.pairingInProgress = false;
-            return;
-        }
-
-        // Socket ka pehla update aane tak wait karo
-        console.log("⏳ Socket ready hone ka wait...");
-        let initCleanup;
-        await withTimeout(
-            new Promise(resolve => {
-                initCleanup = safeOnce(state.client.ev, "connection.update", () => {
-                    resolve();
-                });
-            }),
-            8000,
-            "Socket init timeout"
-        ).catch(() => {
-            // Agar 8s mein update nahi aaya toh bhi aage badho
-        }).finally(() => {
-            if (initCleanup) initCleanup();
-        });
-
-        await delay(500); // small buffer
-
-        // Request pairing code
-        let code;
-        try {
-            console.log("🔄 Requesting pairing code...");
-            code = await withTimeout(
-                state.client.requestPairingCode(number),
-                30000,
-                "Pairing code request timed out"
-            );
-        } catch (e) {
-            console.error("❌ Could not get code:", e.message);
-            state.pairingInProgress = false;
-            if (attempt >= MAX_PAIR) break;
-            await delay(3000);
-            continue;
-        }
-
-        // Format: KRIX-WXYZ style agar code 8 chars hai
-        const formatted = code && code.length === 8
-            ? `${code.slice(0,4)}-${code.slice(4)}`
-            : code;
-
-        console.log("\n  ╔══════════════════════════════════════╗");
-        console.log(`  ║   🔐 PAIRING CODE:  ${(formatted || "").padEnd(13)} ║`);
-        console.log("  ╠══════════════════════════════════════╣");
-        console.log("  ║  WhatsApp > Linked Devices >          ║");
-        console.log("  ║  Link with phone number > Enter Code  ║");
-        console.log("  ╚══════════════════════════════════════╝");
-        console.log("  ⏳ Code enter karo (90s mein)...\n");
-
-        state.pairing = true;
-
-        // Listen for open/close
-        let onUpdate;
-        let credsCleanup;
-        let done = false;
-        const cleanupPair = () => {
-            if (done) return;
-            done = true;
-            if (onUpdate) safeRemoveListener(state.client.ev, "connection.update", onUpdate);
-            if (credsCleanup) credsCleanup();
-        };
-
-        const credsHandler = debounce(async () => {
-            try { await state.saveCreds(); } catch (_) {}
-        }, 3000);
-
-        try {
-            await withTimeout(
-                new Promise((resolve, reject) => {
-                    onUpdate = (update) => {
-                        if (update.connection === "open") {
-                            state.connected         = true;
-                            state.pairing           = false;
-                            state.pairingInProgress = false;
-                            cleanupPair();
-                            resolve();
-                        } else if (update.connection === "close") {
-                            const code = update.lastDisconnect?.error?.output?.statusCode;
-                            // Auth failure = reject, otherwise ignore (might reconnect)
-                            if (isAuthFailure(code, update.lastDisconnect?.error?.message)) {
-                                cleanupPair();
-                                reject(new Error(`Auth failed during pairing (code=${code})`));
-                            }
-                            // else: ignore close, keep waiting
-                        }
-                    };
-                    state.client.ev.on("connection.update", onUpdate);
-                    credsCleanup = safeOnce(state.client.ev, "creds.update", credsHandler);
-                }),
-                95000,
-                "Pairing timeout — code expired ya enter nahi kiya"
-            );
-
-            // Success
-            console.log("✅ Pairing successful!");
-            state.pairingInProgress = false;
-            registerHandlers();
-            return;
-
-        } catch (e) {
-            // Clean up listener if timeout or close fired without removing
-            cleanupPair();
-            console.log(`⚠️ ${e.message}`);
-            state.pairing           = false;
-            state.pairingInProgress = false;
-            if (attempt >= MAX_PAIR) break;
-            await delay(2000);
-        }
-    }
-
-    // All pairing attempts failed — QR fallback
-    state.pairingInProgress = false;
-    console.log("❌ Pairing code failed. Falling back to QR code...");
-    await fallbackToQR(number, authPath);
-}
-
-async function fallbackToQR(number, authPath) {
-    if (state.client) { await closeSocket(state.client); state.client = null; }
-    console.log("🔄 Starting QR mode...");
-
-    state.pairingInProgress = true;
-    let onUpdate;
-    let credsCleanup;
-    let done = false;
-    const cleanupQR = () => {
-        if (done) return;
-        done = true;
-        if (onUpdate && state.client) safeRemoveListener(state.client.ev, "connection.update", onUpdate);
-        if (credsCleanup) credsCleanup();
-    };
-
-    try {
-        const res = await withSocketLock(() => createSocket(number, authPath, true));
-        if (!res) return;
-
-        state.pairing = true;
-        console.log("📱 Scan the QR above: WhatsApp → Linked Devices → Link a device");
-        console.log("⏳ Waiting 120s...\n");
-
-        const credsHandler = debounce(async () => {
-            try { await state.saveCreds(); } catch (_) {}
-        }, 3000);
-
-        await withTimeout(
-            new Promise((resolve, reject) => {
-                onUpdate = (update) => {
-                    if (update.connection === "open") {
-                        state.connected = true;
-                        state.pairing   = false;
-                        cleanupQR();
-                        resolve();
-                    } else if (update.connection === "close") {
-                        cleanupQR();
-                        reject(new Error("Connection closed during QR scan"));
-                    }
-                };
-                state.client.ev.on("connection.update", onUpdate);
-                credsCleanup = safeOnce(state.client.ev, "creds.update", credsHandler);
-            }),
-            122000,
-            "QR scan timeout"
-        );
-
-        console.log("✅ QR scan successful!");
-        registerHandlers();
-
-    } catch (e) {
-        cleanupQR();
-        console.log(`⚠️ ${e.message}`);
-        state.pairing = false;
-    } finally {
-        state.pairingInProgress = false;
+        console.error(`${C.red}❌ Restore failed:${C.reset}`, e.message);
     }
 }
 
@@ -658,71 +556,82 @@ async function fallbackToQR(number, authPath) {
 // ============================================================
 
 async function runSendLoop(task) {
-    while (task.isRunning && !task.stopRequested) {
+    const { messages, jid, delaySec, prefix } = task;
 
+    while (task.isRunning && !task.stopRequested) {
         if (state.authRequired || state.loggedOut) {
-            console.log("🔐 Auth invalid. Task stopped.");
-            task.stopRequested = true;
+            console.log(`${C.red}🔐 Auth invalid. Task stopped.${C.reset}`);
             break;
         }
 
         if (!state.client || !state.connected) {
-            console.log("⏸  Connection lost. Waiting 5s...");
+            console.log(`${C.gray}⏸  Not connected, waiting 5s...${C.reset}`);
             await delay(5000);
             continue;
         }
 
-        const raw = task.messages[task.index];
-        const msg = task.prefix ? `${task.prefix} ${raw}` : raw;
+        const raw = messages[task.index];
+        const msg = prefix ? `${prefix.trim()} ${raw}` : raw;
 
         try {
-            await state.client.sendMessage(task.jid, { text: msg });
+            await state.client.sendMessage(jid, { text: msg });
             task.sent++;
-            console.log(`✅ Sent #${task.sent}${task.jid.includes("@g.us") ? " (group)" : ""}: ${msg.substring(0, 40)}...`);
-            task.index = (task.index + 1) % task.messages.length;
-        } catch (e) {
-            console.error(`❌ Send failed: ${e.message}`);
+            console.log(`${C.green}✅ Sent #${task.sent}:${C.reset} ${msg.substring(0, 50)}`);
+            task.index = (task.index + 1) % messages.length;
+        } catch (err) {
+            console.error(`${C.red}❌ Send failed:${C.reset}`, err.message);
         }
 
-        await delay(task.delaySec * 1000);
+        await delay(delaySec * 1000);
     }
 
     task.isRunning = false;
-    console.log(`🏁 Task finished. Total sent: ${task.sent}`);
+    console.log(`${C.yellow}🏁 Task done. Total sent: ${task.sent}${C.reset}`);
 }
 
 async function sendMessages() {
     if (!state.client || !state.connected)
-        return console.log("❌ Not connected. Use option 1 to pair first.");
+        return console.log(`${C.red}❌ Not connected. Pair first (option 1).${C.reset}`);
     if (state.authRequired || state.loggedOut)
-        return console.log("🔐 Auth invalid. Use option 5 then pair again.");
+        return console.log(`${C.red}🔐 Auth invalid. Pair again (option 1).${C.reset}`);
     if (currentTask && currentTask.isRunning)
-        return console.log("⚠️ Task already running. Use option 4 to stop it.");
+        return console.log(`${C.yellow}⚠️  Task already running. Stop it first (option 4).${C.reset}`);
 
-    const rawTarget = await ask("Target (number with country code or Group ID): ");
-    const filePath  = await ask("Message file path (e.g., messages.txt): ");
-    const prefix    = (await ask("Prefix / Hater Name [Enter to skip]: ")).trim();
-    const delaySec  = parseInt(await ask("Delay in seconds [Default 10]: ")) || 10;
+    const targetType = (await ask(`${C.cyan}Target type [number/group]: ${C.reset}`)).trim().toLowerCase();
+    const rawTarget  = (await ask(`${C.cyan}Target (number or group ID): ${C.reset}`)).trim();
+    const filePath   = (await ask(`${C.cyan}Message file path (e.g. messages.txt): ${C.reset}`)).trim();
+    const prefix     = (await ask(`${C.cyan}Prefix / Hater name [Enter to skip]: ${C.reset}`)).trim();
+    const delaySec   = parseInt(await ask(`${C.cyan}Delay in seconds [default 10]: ${C.reset}`)) || 10;
 
-    if (!fs.existsSync(filePath)) return console.log("❌ File not found.");
+    if (!fs.existsSync(filePath))
+        return console.log(`${C.red}❌ File not found: ${filePath}${C.reset}`);
 
     const messages = fs.readFileSync(filePath, "utf-8")
-        .split(/\r?\n/)
-        .map(l => l.trim())
-        .filter(l => l.length > 0);
+        .split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
 
-    if (!messages.length) return console.log("❌ Message file is empty.");
+    if (!messages.length)
+        return console.log(`${C.red}❌ Message file is empty.${C.reset}`);
 
-    const jid = buildJid(rawTarget);
+    let jid;
+    if (targetType === "group") {
+        const gid = rawTarget.replace(/[^0-9-]/g, "");
+        jid = gid.endsWith("@g.us") ? gid : `${gid}@g.us`;
+    } else {
+        const normalized = normalizeNumber(rawTarget);
+        if (!normalized)
+            return console.log(`${C.red}❌ Invalid number. Use country code (e.g. 923001234567).${C.reset}`);
+        jid = `${normalized}@s.whatsapp.net`;
+    }
+
     currentTask = {
         jid, messages, delaySec,
-        prefix: prefix || null,
+        prefix: prefix || "",
         index: 0, sent: 0,
         isRunning: true, stopRequested: false
     };
 
-    console.log(`🚀 Started! Sending to ${jid}. Use option 4 to stop.`);
-    runSendLoop(currentTask); // non-blocking
+    console.log(`${C.green}🚀 Sending to ${jid}. Option 4 to stop.${C.reset}`);
+    runSendLoop(currentTask);
 }
 
 // ============================================================
@@ -731,21 +640,22 @@ async function sendMessages() {
 
 async function showGroups() {
     if (!state.client || !state.connected)
-        return console.log("❌ Not connected. Pair first.");
+        return console.log(`${C.red}❌ Not connected.${C.reset}`);
 
-    console.log("🔄 Fetching groups...");
+    console.log(`${C.cyan}🔄 Fetching groups...${C.reset}`);
     try {
-        const groups  = await state.client.groupFetchAllParticipating();
-        const entries = Object.entries(groups);
-        if (!entries.length) return console.log("No groups found.");
-        entries.forEach(([gid, g], i) => {
-            console.log(`\n  ${i + 1}. ${g.subject}`);
-            console.log(`     ID      : ${gid.replace("@g.us", "")}`);
-            console.log(`     Members : ${g.participants?.length ?? "N/A"}`);
-        });
-        console.log("");
+        const groups = await state.client.groupFetchAllParticipating();
+        let i = 1;
+        for (const [gid, g] of Object.entries(groups)) {
+            const id = gid.replace("@g.us", "");
+            console.log(`${C.white}${i}. ${g.subject}${C.reset}`);
+            console.log(`   ${C.gray}ID: ${id}${C.reset}`);
+            console.log(`   ${C.gray}Members: ${g.participants ? g.participants.length : "N/A"}${C.reset}`);
+            i++;
+        }
+        if (i === 1) console.log(`${C.yellow}No groups found.${C.reset}`);
     } catch (e) {
-        console.error("❌ Error fetching groups:", e.message);
+        console.error(`${C.red}❌ Error:${C.reset}`, e.message);
     }
 }
 
@@ -755,9 +665,9 @@ async function showGroups() {
 
 async function logoutAndDelete() {
     if (!state.client && !state.authPath)
-        return console.log("⚠️ No active session found.");
+        return console.log(`${C.yellow}⚠️  No active session.${C.reset}`);
 
-    console.log("🛑 Logging out...");
+    console.log(`${C.red}🛑 Logging out...${C.reset}`);
 
     if (currentTask && currentTask.isRunning) {
         currentTask.stopRequested = true;
@@ -767,80 +677,126 @@ async function logoutAndDelete() {
     state.stopReconnect = true;
 
     if (state.client) {
-        try { await state.client.logout().catch(() => {}); } catch (_) {}
-        try { state.client.ev.removeAllListeners?.(); state.client.end(); } catch (_) {}
+        try { state.client.ev.removeAllListeners(); state.client.end(); } catch (e) {}
     }
 
     if (state.authPath && fs.existsSync(state.authPath)) {
         fs.rmSync(state.authPath, { recursive: true, force: true });
-        console.log("🧹 Auth files deleted.");
+        console.log(`${C.gray}🧹 Auth files deleted.${C.reset}`);
     }
 
     Object.assign(state, {
         client: null, number: null, authPath: null,
         connected: false, loggedOut: false, authRequired: false,
-        reconnecting: false, stopReconnect: false,
-        reconnectAttempts: 0, lastError: null,
-        saveCreds: null, credsRegistered: false,
-        pairing: false, pairingInProgress: false
+        reconnecting: false, stopReconnect: false, reconnectAttempts: 0,
+        lastError: null, saveCreds: null, credsRegistered: false,
+        pairingInProgress: false
     });
     currentTask = null;
-    console.log("✅ Session cleared. You can pair again.");
+
+    console.log(`${C.green}✅ Session deleted. You can pair again (option 1).${C.reset}`);
 }
 
 // ============================================================
-//  MAIN LOOP
+//  CLI — READLINE
+// ============================================================
+
+const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+function ask(q) { return new Promise(resolve => rl.question(q, resolve)); }
+
+// ============================================================
+//  BANNER + MENU
+// ============================================================
+
+function showBanner() {
+    console.clear();
+    console.log(`${C.green}${C.bold}`);
+    console.log("  ██╗  ██╗██████╗ ██╗██╗  ██╗");
+    console.log("  ██║ ██╔╝██╔══██╗██║╚██╗██╔╝");
+    console.log("  █████╔╝ ██████╔╝██║ ╚███╔╝ ");
+    console.log("  ██╔═██╗ ██╔══██╗██║ ██╔██╗ ");
+    console.log("  ██║  ██╗██║  ██║██║██╔╝ ██╗");
+    console.log("  ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝╚═╝  ╚═╝");
+    console.log(`${C.reset}`);
+    console.log(`${C.cyan}  ╔═══════════════════════════════════════╗${C.reset}`);
+    console.log(`${C.cyan}  ║${C.reset}  📱 ${C.white}WhatsApp Automation Tool${C.reset}             ${C.cyan}║${C.reset}`);
+    console.log(`${C.cyan}  ║${C.reset}  🔗 ${C.white}Powered by Baileys  •  Termux CLI${C.reset}    ${C.cyan}║${C.reset}`);
+    console.log(`${C.cyan}  ║${C.reset}  👑 ${C.yellow}Made by KRIX${C.reset}                         ${C.cyan}║${C.reset}`);
+    console.log(`${C.cyan}  ╚═══════════════════════════════════════╝${C.reset}`);
+}
+
+function showMenu() {
+    const status = state.connected
+        ? `${C.green}● Connected${C.reset}`
+        : `${C.red}● Disconnected${C.reset}`;
+    const task   = currentTask && currentTask.isRunning
+        ? `${C.yellow}● Task running (sent: ${currentTask.sent})${C.reset}`
+        : `${C.gray}● No task${C.reset}`;
+
+    console.log(`\n${C.cyan}  ┌─────────────────────────────┐${C.reset}`);
+    console.log(`${C.cyan}  │${C.reset}   ${C.white}KRIX – TERMUX MENU${C.reset}           ${C.cyan}│${C.reset}`);
+    console.log(`${C.cyan}  ├─────────────────────────────┤${C.reset}`);
+    console.log(`${C.cyan}  │${C.reset}  ${status}           ${C.cyan}│${C.reset}`);
+    console.log(`${C.cyan}  │${C.reset}  ${task}     ${C.cyan}│${C.reset}`);
+    console.log(`${C.cyan}  ├─────────────────────────────┤${C.reset}`);
+    console.log(`${C.cyan}  │${C.reset}  ${C.white}1.${C.reset} Pair / Restore Session       ${C.cyan}│${C.reset}`);
+    console.log(`${C.cyan}  │${C.reset}  ${C.white}2.${C.reset} Send Messages (bulk)         ${C.cyan}│${C.reset}`);
+    console.log(`${C.cyan}  │${C.reset}  ${C.white}3.${C.reset} Show Groups                  ${C.cyan}│${C.reset}`);
+    console.log(`${C.cyan}  │${C.reset}  ${C.white}4.${C.reset} Stop Current Task            ${C.cyan}│${C.reset}`);
+    console.log(`${C.cyan}  │${C.reset}  ${C.white}5.${C.reset} Logout / Delete Session      ${C.cyan}│${C.reset}`);
+    console.log(`${C.cyan}  │${C.reset}  ${C.white}6.${C.reset} Exit                         ${C.cyan}│${C.reset}`);
+    console.log(`${C.cyan}  └─────────────────────────────┘${C.reset}`);
+}
+
+// ============================================================
+//  MAIN
 // ============================================================
 
 async function main() {
     showBanner();
-    console.log("  Background Venom — Termux CLI  |  No port. No web. Pure terminal.\n");
 
     await tryRestoreSession();
 
     while (true) {
-        await showMenu();
-        const choice = (await ask("  Select option: ")).trim();
+        showMenu();
+        const choice = (await ask(`\n${C.yellow}  Select option: ${C.reset}`)).trim();
 
         switch (choice) {
             case "1": await generatePairingCode(); break;
             case "2": await sendMessages();        break;
-            case "3": await showGroups();           break;
+            case "3": await showGroups();          break;
             case "4":
                 if (currentTask && currentTask.isRunning) {
                     currentTask.stopRequested = true;
-                    console.log("🛑 Stop requested. Will stop after current message.");
+                    console.log(`${C.yellow}🛑 Stop requested. Will stop after current message.${C.reset}`);
                 } else {
-                    console.log("ℹ️  No task running.");
+                    console.log(`${C.gray}ℹ️  No task running.${C.reset}`);
                 }
                 break;
             case "5": await logoutAndDelete(); break;
             case "6":
-                console.log("\n  👋 Exiting. Goodbye!\n");
-                if (currentTask && currentTask.isRunning) {
+                console.log(`${C.yellow}👋 Exiting KRIX...${C.reset}`);
+                if (currentTask) {
                     currentTask.stopRequested = true;
                     currentTask.isRunning     = false;
                 }
                 if (state.client) {
-                    try { state.client.ev.removeAllListeners?.(); state.client.end(); } catch (_) {}
+                    try { state.client.ev.removeAllListeners(); state.client.end(); } catch (e) {}
                 }
                 rl.close();
                 process.exit(0);
                 break;
             default:
-                console.log("❌ Invalid option. Choose 1–6.");
+                console.log(`${C.red}❌ Invalid option. Enter 1-6.${C.reset}`);
         }
     }
 }
 
 // ============================================================
-//  CRASH HANDLERS
+//  CRASH GUARDS
 // ============================================================
 
-process.on("uncaughtException",  err    => console.error("🔥 Uncaught Exception:", err.message));
-process.on("unhandledRejection", reason => console.error("🔥 Unhandled Rejection:", reason));
+process.on("uncaughtException",  err    => console.error(`${C.red}🔥 Uncaught:${C.reset}`, err));
+process.on("unhandledRejection", reason => console.error(`${C.red}🔥 Rejection:${C.reset}`, reason));
 
-// ============================================================
-//  START
-// ============================================================
 main();
