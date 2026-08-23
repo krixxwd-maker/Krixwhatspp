@@ -40,6 +40,29 @@ const logger = pino({ level: "fatal" });
 });
 
 // ============================================================
+//  EVENT HELPERS — Baileys ke liye safe versions
+// ============================================================
+
+// Kisi bhi event emitter se listener hatao — off / removeListener dono try karta hai
+function safeRemoveListener(emitter, event, listener) {
+    try { emitter.off?.(event, listener); } catch (_) {}
+    try { emitter.removeListener?.(event, listener); } catch (_) {}
+}
+
+// once() ka safe version: on() use karta hai, fir khud ko cleanup kar leta hai
+function safeOnce(emitter, event, handler) {
+    const wrapped = (...args) => {
+        cleanup();
+        handler(...args);
+    };
+    function cleanup() {
+        safeRemoveListener(emitter, event, wrapped);
+    }
+    emitter.on(event, wrapped);
+    return cleanup;  // manual cleanup ke liye bhi return karta hai
+}
+
+// ============================================================
 //  GLOBAL STATE
 // ============================================================
 
@@ -134,8 +157,8 @@ function closeSocket(client = state.client, timeout = 2500) {
         if (!client) return resolve();
         let settled = false;
         const done = () => { if (!settled) { settled = true; resolve(); } };
-        try { client.ev.removeAllListeners("connection.update"); } catch (_) {}
-        try { client.ev.removeAllListeners("creds.update"); }      catch (_) {}
+        try { client.ev.removeAllListeners?.("connection.update"); } catch (_) {}
+        try { client.ev.removeAllListeners?.("creds.update"); }      catch (_) {}
         try {
             client.ev.on("connection.update", u => {
                 if (u.connection === "close") done();
@@ -400,7 +423,7 @@ async function tryRestoreSession() {
             await delay(1000);
         }
 
-        if (state.connected)       console.log("✅ Session restored and connected.");
+        if (state.connected)         console.log("✅ Session restored and connected.");
         else if (state.authRequired) console.log("⚠️ Session invalid. Use option 1 to pair again.");
         else                         console.log("🔄 Waiting for auto-reconnect...");
     } catch (e) {
@@ -455,21 +478,21 @@ async function generatePairingCode() {
             return;
         }
 
-        // ✅ Fix: Socket ka pehla update aane tak wait karo
-        // (delay(1000) kafi nahi tha — socket ready se pehle code maang leta tha)
+        // Socket ka pehla update aane tak wait karo
         console.log("⏳ Socket ready hone ka wait...");
+        let initCleanup;
         await withTimeout(
             new Promise(resolve => {
-                const init = () => {
-                    state.client.ev.removeListener("connection.update", init);
+                initCleanup = safeOnce(state.client.ev, "connection.update", () => {
                     resolve();
-                };
-                state.client.ev.once("connection.update", init);
+                });
             }),
             8000,
             "Socket init timeout"
         ).catch(() => {
             // Agar 8s mein update nahi aaya toh bhi aage badho
+        }).finally(() => {
+            if (initCleanup) initCleanup();
         });
 
         await delay(500); // small buffer
@@ -508,6 +531,15 @@ async function generatePairingCode() {
 
         // Listen for open/close
         let onUpdate;
+        let credsCleanup;
+        let done = false;
+        const cleanupPair = () => {
+            if (done) return;
+            done = true;
+            if (onUpdate) safeRemoveListener(state.client.ev, "connection.update", onUpdate);
+            if (credsCleanup) credsCleanup();
+        };
+
         const credsHandler = debounce(async () => {
             try { await state.saveCreds(); } catch (_) {}
         }, 3000);
@@ -520,20 +552,20 @@ async function generatePairingCode() {
                             state.connected         = true;
                             state.pairing           = false;
                             state.pairingInProgress = false;
-                            state.client.ev.removeListener("connection.update", onUpdate);
+                            cleanupPair();
                             resolve();
                         } else if (update.connection === "close") {
                             const code = update.lastDisconnect?.error?.output?.statusCode;
                             // Auth failure = reject, otherwise ignore (might reconnect)
                             if (isAuthFailure(code, update.lastDisconnect?.error?.message)) {
-                                state.client.ev.removeListener("connection.update", onUpdate);
+                                cleanupPair();
                                 reject(new Error(`Auth failed during pairing (code=${code})`));
                             }
-                            // else: ignore close, keep waiting — WA sometimes disconnects briefly
+                            // else: ignore close, keep waiting
                         }
                     };
                     state.client.ev.on("connection.update", onUpdate);
-                    state.client.ev.once("creds.update", credsHandler);
+                    credsCleanup = safeOnce(state.client.ev, "creds.update", credsHandler);
                 }),
                 95000,
                 "Pairing timeout — code expired ya enter nahi kiya"
@@ -547,7 +579,7 @@ async function generatePairingCode() {
 
         } catch (e) {
             // Clean up listener if timeout or close fired without removing
-            try { state.client.ev.removeListener("connection.update", onUpdate); } catch (_) {}
+            cleanupPair();
             console.log(`⚠️ ${e.message}`);
             state.pairing           = false;
             state.pairingInProgress = false;
@@ -568,6 +600,14 @@ async function fallbackToQR(number, authPath) {
 
     state.pairingInProgress = true;
     let onUpdate;
+    let credsCleanup;
+    let done = false;
+    const cleanupQR = () => {
+        if (done) return;
+        done = true;
+        if (onUpdate && state.client) safeRemoveListener(state.client.ev, "connection.update", onUpdate);
+        if (credsCleanup) credsCleanup();
+    };
 
     try {
         const res = await withSocketLock(() => createSocket(number, authPath, true));
@@ -587,15 +627,15 @@ async function fallbackToQR(number, authPath) {
                     if (update.connection === "open") {
                         state.connected = true;
                         state.pairing   = false;
-                        state.client.ev.removeListener("connection.update", onUpdate);
+                        cleanupQR();
                         resolve();
                     } else if (update.connection === "close") {
-                        state.client.ev.removeListener("connection.update", onUpdate);
+                        cleanupQR();
                         reject(new Error("Connection closed during QR scan"));
                     }
                 };
                 state.client.ev.on("connection.update", onUpdate);
-                state.client.ev.once("creds.update", credsHandler);
+                credsCleanup = safeOnce(state.client.ev, "creds.update", credsHandler);
             }),
             122000,
             "QR scan timeout"
@@ -605,7 +645,7 @@ async function fallbackToQR(number, authPath) {
         registerHandlers();
 
     } catch (e) {
-        try { if (onUpdate && state.client) state.client.ev.removeListener("connection.update", onUpdate); } catch (_) {}
+        cleanupQR();
         console.log(`⚠️ ${e.message}`);
         state.pairing = false;
     } finally {
@@ -614,7 +654,7 @@ async function fallbackToQR(number, authPath) {
 }
 
 // ============================================================
-//  SEND MESSAGES  (single, fixed definition)
+//  SEND MESSAGES
 // ============================================================
 
 async function runSendLoop(task) {
@@ -682,7 +722,7 @@ async function sendMessages() {
     };
 
     console.log(`🚀 Started! Sending to ${jid}. Use option 4 to stop.`);
-    runSendLoop(currentTask); // non-blocking — menu stays active
+    runSendLoop(currentTask); // non-blocking
 }
 
 // ============================================================
@@ -728,7 +768,7 @@ async function logoutAndDelete() {
 
     if (state.client) {
         try { await state.client.logout().catch(() => {}); } catch (_) {}
-        try { state.client.ev.removeAllListeners(); state.client.end(); } catch (_) {}
+        try { state.client.ev.removeAllListeners?.(); state.client.end(); } catch (_) {}
     }
 
     if (state.authPath && fs.existsSync(state.authPath)) {
@@ -749,7 +789,7 @@ async function logoutAndDelete() {
 }
 
 // ============================================================
-//  MAIN LOOP  (single definition)
+//  MAIN LOOP
 // ============================================================
 
 async function main() {
@@ -776,13 +816,13 @@ async function main() {
                 break;
             case "5": await logoutAndDelete(); break;
             case "6":
-                console.log("\n  👋 Exiting KRIX. Goodbye!\n");
+                console.log("\n  👋 Exiting. Goodbye!\n");
                 if (currentTask && currentTask.isRunning) {
                     currentTask.stopRequested = true;
                     currentTask.isRunning     = false;
                 }
                 if (state.client) {
-                    try { state.client.ev.removeAllListeners(); state.client.end(); } catch (_) {}
+                    try { state.client.ev.removeAllListeners?.(); state.client.end(); } catch (_) {}
                 }
                 rl.close();
                 process.exit(0);
@@ -794,7 +834,7 @@ async function main() {
 }
 
 // ============================================================
-//  CRASH HANDLERS  (single set — logs but doesn't crash)
+//  CRASH HANDLERS
 // ============================================================
 
 process.on("uncaughtException",  err    => console.error("🔥 Uncaught Exception:", err.message));
