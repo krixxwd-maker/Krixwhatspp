@@ -3,7 +3,8 @@ const {
     useMultiFileAuthState, 
     delay, 
     DisconnectReason, 
-    Browsers 
+    Browsers,
+    fetchLatestBaileysVersion 
 } = require("@whiskeysockets/baileys");
 const fs = require("fs");
 const pino = require("pino");
@@ -18,7 +19,6 @@ const rl = readline.createInterface({
 
 const question = (query) => new Promise((resolve) => rl.question(query, resolve));
 
-// Total Green Theme
 const colors = {
     green: "\x1b[32m",
     brightGreen: "\x1b[92m",
@@ -37,7 +37,7 @@ const showBanner = () => {
     console.log(color(" ╚══╝╚══╝ ╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝   ╚══════╝╚═╝  ╚═╝╚═╝     ", colors.green));
     console.log(color("╔═════════════════════════════════════════════════════════════╗", colors.green));
     console.log(color("║  TOOLS       : WHATSAPP MESSENGER                           ║", colors.brightGreen));
-    console.log(color("║  VERSION     : 3.1.0 (LOGIN FIX)                            ║", colors.green));
+    console.log(color("║  VERSION     : 3.2.0 (PROTOCOL FIX)                         ║", colors.green));
     console.log(color("║  OWNER       : KRIX                                        ║", colors.brightGreen));
     console.log(color("╚═════════════════════════════════════════════════════════════╝", colors.green));
 };
@@ -51,17 +51,6 @@ let currentIndex = 0;
 let sock = null;
 let isConfigured = false;
 let isSending = false;
-
-const autoSeeStatuses = (socket) => {
-    socket.ev.on("messages.upsert", async ({ messages }) => {
-        for (const msg of messages) {
-            if (msg.key.fromMe || msg.message?.protocolMessage) continue;
-            try {
-                await socket.readMessages([msg.key]);
-            } catch (e) {}
-        }
-    });
-};
 
 async function startSending() {
     if (isSending) return;
@@ -108,12 +97,14 @@ async function startSending() {
 
 async function connectToWhatsApp() {
     const { state, saveCreds } = await useMultiFileAuthState("./auth_info");
+    const { version } = await fetchLatestBaileysVersion();
 
     sock = makeWASocket({
+        version,
         logger: pino({ level: "silent" }),
         auth: state,
         printQRInTerminal: false,
-        browser: Browsers.ubuntu("Chrome"),
+        browser: Browsers.macOS("Desktop"),
         markOnlineOnConnect: true,
         connectTimeoutMs: 60000,
         defaultQueryTimeoutMs: 60000,
@@ -132,16 +123,15 @@ async function connectToWhatsApp() {
             return setTimeout(connectToWhatsApp, 2000);
         }
 
-        await delay(5000);
+        await delay(3000);
 
         try {
             const code = await sock.requestPairingCode(phoneNumber);
             showBanner();
             console.log(color(`\n[✓] YOUR PAIRING CODE: ${code}\n`, colors.brightGreen));
-            console.log(color("[!] Enter this code on WhatsApp (Linked Devices -> Link with phone number)\n"));
+            console.log(color("[!] Open WhatsApp -> Linked Devices -> Link with Phone Number.\n"));
         } catch (err) {
             console.log(color(`[!] Pairing Code Request Failed: ${err.message}`));
-            console.log(color("[!] Deleting old 'auth_info' session and retrying..."));
             if (fs.existsSync("./auth_info")) {
                 fs.rmSync("./auth_info", { recursive: true, force: true });
             }
@@ -155,8 +145,6 @@ async function connectToWhatsApp() {
         if (connection === "open") {
             showBanner();
             console.log(color("[✓] WhatsApp Connected Successfully!", colors.brightGreen));
-
-            autoSeeStatuses(sock);
 
             if (!isConfigured) {
                 isConfigured = true;
@@ -189,7 +177,7 @@ async function connectToWhatsApp() {
 
                 const msgFile = await question(color("[+] Enter message file path: "));
                 if (!fs.existsSync(msgFile)) {
-                    console.log(color("[!] File does not exist! Please re-run the script with a valid path."));
+                    console.log(color("[!] File does not exist! Check path."));
                     process.exit(1);
                 }
                 messages = fs.readFileSync(msgFile, "utf-8").split("\n").filter(line => line.trim());
@@ -198,7 +186,7 @@ async function connectToWhatsApp() {
                 const delayInput = await question(color("[+] Enter delay in seconds: "));
                 delayTime = parseFloat(delayInput) || 5;
 
-                console.log(color("\n[✓] Target setup complete. Starting sending task...\n", colors.brightGreen));
+                console.log(color("\n[✓] Setup complete. Starting sending task...\n", colors.brightGreen));
                 showBanner();
                 
                 startSending();
@@ -210,7 +198,7 @@ async function connectToWhatsApp() {
             const isLoggedOut = statusCode === DisconnectReason.loggedOut;
 
             if (isLoggedOut) {
-                console.log(color("[!] Session logged out by WhatsApp. Clearing './auth_info'..."));
+                console.log(color("[!] Session logged out. Clearing './auth_info'..."));
                 if (fs.existsSync("./auth_info")) {
                     fs.rmSync("./auth_info", { recursive: true, force: true });
                 }
@@ -225,12 +213,4 @@ async function connectToWhatsApp() {
     });
 }
 
-const userKey = crypto.createHash("sha256").update(os.platform() + os.userInfo().username).digest("hex");
-console.log(color(`Your Key: ${userKey}`, colors.brightGreen));
-console.log(color("[!] Initializing..."));
-
 connectToWhatsApp();
-
-process.on('uncaughtException', (err) => {
-    console.log(color(`[!] Uncaught Exception: ${err.message}`));
-});
