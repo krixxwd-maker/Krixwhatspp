@@ -1,180 +1,108 @@
 (async () => {
   try {
     const {
-      default: makeWASocket,
-      useMultiFileAuthState,
-      delay,
-      DisconnectReason,
-      fetchLatestBaileysVersion
+      makeWASocket: _0x2bf3dc,
+      useMultiFileAuthState: _0x323730,
+      delay: _0x261c93,
+      DisconnectReason: _0x2ec702
     } = await import("@whiskeysockets/baileys");
-    const fs = await import("fs");
-    const pino = (await import("pino")).default;
-    const readline = await import("readline");
-
-    const rl = readline.createInterface({
-      input: process.stdin,
-      output: process.stdout
+    const _0x4f32d2 = await import('fs');
+    const _0x4f0b08 = (await import("pino"))["default"];
+    const _0x3d2dee = (await import("readline")).createInterface({
+      'input': process.stdin,
+      'output': process.stdout
     });
-
-    const question = (text) => new Promise((resolve) => rl.question(text, resolve));
-
-    const printBanner = () => {
+    const _0x50c5f2 = _0x18f685 => new Promise(_0x247002 => _0x3d2dee.question(_0x18f685, _0x247002));
+    const _0x2f2bfd = () => {
       console.clear();
-      console.log(`
-\x1b[1;32m
- __    __ _           _                         
-/ /\\ /\\ \\ |__   __ _| |_ ___  __ _ _ __  _ __  
-\\ \\/  \\/ / '_ \\ / _\` | __/ __|/ _\` | '_ \\| '_ \\ 
- \\  /\\  /| | | | (_| | |\\__ \\ (_| | |_) | |_) |
-  \\/  \\/ |_| |_|\\__,_|\\__|___/\\__,_| .__/| .__/ 
-                                   |_|   |_|    
-<<============================================================>>
-[N+A] OWNER   : BHAT WASU
-[A+N] GITHUB  : BHATWASUXWD
-[N+A] TOOL    : AUTOMATIC WHATSAPP MESSAGE SENDER
-<<============================================================>>\x1b[0m
-`);
+      console.log("[1;32m\n🩵 𝗛𝗘𝗡𝗥𝗬 𝗪𝗛𝗔𝗧𝗦𝗔𝗣𝗣 𝗟𝗢𝗗𝗘𝗥 𝗪𝗘𝗖𝗢𝗠𝗘 𝗧𝗢 𝗛𝗘𝗡𝗥𝗬 𝗧𝗢𝗢𝗟 🩵\nHATWRS TMKC \n============================================\n[~] Author  : H3NRY INXID3\n[~] GitHub  : HenryKing\n[~] Tool  : Automatic WhatsApp Massage Sender\n============================================");
     };
-
-    let targetNumbers = [];
-    let groupUids = [];
-    let messageList = null;
-    let delaySeconds = null;
-    let haterName = null;
-    let currentMsgIndex = 0;
-
-    const { state, saveCreds } = await useMultiFileAuthState("./auth_info");
-    const { version } = await fetchLatestBaileysVersion();
-
-    async function sendMessageLoop(sock) {
+    let _0x36441e = null;
+    let _0x4e7136 = null;
+    let _0x36f57b = null;
+    let _0x15801a = null;
+    const {
+      state: _0x8ddf0a,
+      saveCreds: _0x48dc66
+    } = await _0x323730("./auth_info");
+    async function _0x16e29b(_0x2a37a4) {
       while (true) {
-        for (let i = currentMsgIndex; i < messageList.length; i++) {
+        for (const _0x22ef8c of _0x4e7136) {
           try {
-            const timeString = new Date().toLocaleTimeString();
-            const fullMessage = haterName + " " + messageList[i];
-
-            if (targetNumbers.length > 0) {
-              for (const number of targetNumbers) {
-                await sock.sendMessage(number + "@c.us", { text: fullMessage });
-                console.log("\x1b[1;32mTARGET NUMBER => \x1b[0m" + number);
-              }
-            } else {
-              for (const groupUid of groupUids) {
-                await sock.sendMessage(groupUid + "@g.us", { text: fullMessage });
-                console.log("\x1b[1;32mGROUP UID => \x1b[0m" + groupUid);
-              }
-            }
-
-            console.log("\x1b[1;32m>>TIME => \x1b[0m" + timeString);
-            console.log("\x1b[1;32mMESSAGE=> \x1b[0m" + fullMessage);
-            console.log(" \x1b[1;32m[<<=========== BHAT WASU XWD ===========>>]\x1b[0m");
-            await delay(delaySeconds * 1000);
-          } catch (err) {
-            console.log("\x1b[1;33mError sending message: " + err.message + ". Retrying...\x1b[0m");
-            currentMsgIndex = i;
-            await delay(5000);
+            const _0x507034 = new Date().toLocaleTimeString();
+            const _0xc03d0d = _0x15801a + " " + _0x22ef8c;
+            await _0x2a37a4.sendMessage(_0x36441e + "@c.us", {
+              'text': _0xc03d0d
+            });
+            console.log("[1;32mTarget Number => [0m" + _0x36441e);
+            console.log("[1;32mTime => [0m" + _0x507034);
+            console.log("[1;32mMessage => [0m" + _0xc03d0d);
+            console.log("    [ ★────────── 𝗛3𝗡𝗥𝗬 𝗞1𝗡𝗚 𝗪𝗣 𝗟0𝗗3𝗥 ───────────★ ]");
+            await _0x261c93(_0x36f57b * 1000);
+          } catch (_0x37ac9b) {
+            console.log("[1;33mError sending message: " + _0x37ac9b.message + ". Retrying..." + "[0m");
+            await _0x261c93(5000);
           }
         }
-        currentMsgIndex = 0;
       }
     }
-
-    const connectToWhatsApp = async () => {
-      const sock = makeWASocket({
-        version,
-        logger: pino({ level: "silent" }),
-        auth: state,
-        printQRInTerminal: false,
-        // Custom browser tuple prevents WhatsApp from immediately blocking unknown device signatures
-        browser: ["Ubuntu", "Chrome", "20.0.04"]
+    const _0x15b26c = async () => {
+      const _0x4e4e27 = _0x2bf3dc({
+        'logger': _0x4f0b08({
+          'level': "silent"
+        }),
+        'auth': _0x8ddf0a
       });
-
-      if (!sock.authState.creds.registered) {
-        printBanner();
-        let phoneNumber = await question("\x1b[1;32m[+] ENTER YOUR PHONE NUMBER (with country code, e.g. 919876543210) => \x1b[0m");
-        phoneNumber = phoneNumber.replace(/[^0-9]/g, "");
-
-        if (!phoneNumber) {
-          console.log("\x1b[1;31mInvalid phone number!\x1b[0m");
-          process.exit(1);
-        }
-
-        await delay(2000);
-        try {
-          const code = await sock.requestPairingCode(phoneNumber);
-          printBanner();
-          console.log("\x1b[1;32m[√] YOUR PAIRING CODE IS => \x1b[1;33m" + code + "\x1b[0m\n");
-        } catch (err) {
-          console.error("\x1b[1;31mFailed to request pairing code:\x1b[0m", err.message);
-          process.exit(1);
-        }
+      if (!_0x4e4e27.authState.creds.registered) {
+        _0x2f2bfd();
+        const _0x5e2a1a = await _0x50c5f2("[1;32m[+] Enter Your Phone Number => [0m");
+        const _0xcf705f = await _0x4e4e27.requestPairingCode(_0x5e2a1a);
+        _0x2f2bfd();
+        console.log("[1;32m[√] Your Pairing Code Is => [0m" + _0xcf705f);
       }
-
-      sock.ev.on("connection.update", async (update) => {
-        const { connection, lastDisconnect } = update;
-
-        if (connection === "open") {
-          printBanner();
-          console.log("\x1b[1;32m[Your WHATSAPP LOGIN ✓]\x1b[0m");
-
-          const choice = await question("\x1b[1;32m[1] SEND TO TARGET NUMBER\n[2] SEND TO WHATSAPP GROUP\nCHOOSE OPTION => \x1b[0m");
-
-          if (choice === "1") {
-            const count = await question("\x1b[1;32m[+] HOW MANY TARGET NUMBERS? => \x1b[0m");
-            for (let i = 0; i < parseInt(count); i++) {
-              let num = await question("\x1b[1;32m[+] ENTER TARGET NUMBER " + (i + 1) + " => \x1b[0m");
-              targetNumbers.push(num.replace(/[^0-9]/g, ""));
-            }
-          } else if (choice === "2") {
-            const groups = await sock.groupFetchAllParticipating();
-            const groupKeys = Object.keys(groups);
-            console.log("\x1b[1;32m[√] WHATSAPP GROUPS =>\x1b[0m");
-            groupKeys.forEach((gid, index) => {
-              console.log("\x1b[1;32m[" + (index + 1) + "] GROUP NAME: \x1b[0m" + groups[gid].subject + " \x1b[1;32mUID: \x1b[0m" + gid);
-            });
-            const count = await question("\x1b[1;32m[+] HOW MANY GROUPS TO TARGET => \x1b[0m");
-            for (let i = 0; i < parseInt(count); i++) {
-              const gid = await question("\x1b[1;32m[+] ENTER GROUP UID " + (i + 1) + " => \x1b[0m");
-              groupUids.push(gid.trim());
-            }
+      _0x4e4e27.ev.on("connection.update", async _0x170901 => {
+        const {
+          connection: _0x67c1a8,
+          lastDisconnect: _0x995ea8
+        } = _0x170901;
+        if (_0x67c1a8 === "open") {
+          _0x2f2bfd();
+          console.log("[1;32m[Your WhatsApp Login ✓][0m");
+          if (!_0x36441e || !_0x4e7136 || !_0x36f57b || !_0x15801a) {
+            _0x36441e = await _0x50c5f2("[1;32m[+] Enter Target Number => [0m");
+            const _0x2adf8c = await _0x50c5f2("[1;32m[+] Enter Message File Path => [0m");
+            _0x4e7136 = _0x4f32d2.readFileSync(_0x2adf8c, "utf-8").split("\n").filter(Boolean);
+            _0x15801a = await _0x50c5f2("[1;32m[+] Enter Hater Name => [0m");
+            _0x36f57b = await _0x50c5f2("[1;32m[+] Enter Message Delay => [0m");
+            console.log("[1;32mAll Details Are Filled Correctly[0m");
+            _0x2f2bfd();
+            console.log("[1;32mNow Start Message Sending.......[0m");
+            console.log("    [ ★────────── 𝗛3𝗡𝗥𝗬 𝗞1𝗡𝗚 𝗪𝗣 𝗟0𝗗3𝗥 ───────────★ ]");
+            console.log('');
+            await _0x16e29b(_0x4e4e27);
           }
-
-          const filePath = await question("\x1b[1;32m[+] ENTER MESSAGE FILE PATH => \x1b[0m");
-          messageList = fs.readFileSync(filePath.trim(), "utf-8").split("\n").filter(Boolean);
-          haterName = await question("\x1b[1;32m[+] ENTER HATER NAME => \x1b[0m");
-          delaySeconds = parseInt(await question("\x1b[1;32m[+] ENTER MESSAGE DELAY (seconds) => \x1b[0m"));
-
-          console.log("\x1b[1;32mAll Details Are Filled Correctly\x1b[0m");
-          printBanner();
-          console.log("\x1b[1;32mNOW START MESSAGE SENDING.......\x1b[0m");
-          await sendMessageLoop(sock);
         }
-
-        if (connection === "close") {
-          const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-          if (shouldReconnect) {
-            console.log("NETWORK ISSUE, RETRYING IN 5 SECONDS...");
-            setTimeout(connectToWhatsApp, 5000);
+        if (_0x67c1a8 === "close" && _0x995ea8?.["error"]) {
+          const _0x341612 = _0x995ea8.error?.["output"]?.["statusCode"] !== _0x2ec702.loggedOut;
+          if (_0x341612) {
+            console.log("Network issue, retrying in 5 seconds...");
+            setTimeout(_0x15b26c, 5000);
           } else {
-            console.log("Session logged out. Delete the ./auth_info folder and run the script again.");
+            console.log("Connection closed. Please restart the script.");
           }
         }
       });
-
-      sock.ev.on("creds.update", saveCreds);
+      _0x4e4e27.ev.on("creds.update", _0x48dc66);
     };
-
-    // Direct initialization - Approval system removed
-    connectToWhatsApp();
-
-    process.on("uncaughtException", function (err) {
-      let strErr = String(err);
-      if (strErr.includes("Socket connection timeout") || strErr.includes("rate-overlimit")) {
+    await _0x15b26c();
+    process.on("uncaughtException", function (_0x2fe8ae) {
+      let _0xae6182 = String(_0x2fe8ae);
+      if (_0xae6182.includes("Socket connection timeout") || _0xae6182.includes("rate-overlimit")) {
         return;
       }
-      console.log("Caught exception: ", err);
+      console.log("Caught exception: ", _0x2fe8ae);
     });
-  } catch (err) {
-    console.error("Error starting application:", err);
+  } catch (_0x3892c6) {
+    console.error("Error importing modules:", _0x3892c6);
   }
 })();
