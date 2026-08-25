@@ -3,14 +3,11 @@ const {
     useMultiFileAuthState, 
     delay, 
     DisconnectReason, 
-    Browsers,
     fetchLatestBaileysVersion 
 } = require("@whiskeysockets/baileys");
 const fs = require("fs");
 const pino = require("pino");
 const readline = require("readline");
-const os = require("os");
-const crypto = require("crypto");
 
 const rl = readline.createInterface({
     input: process.stdin,
@@ -37,7 +34,7 @@ const showBanner = () => {
     console.log(color(" ╚══╝╚══╝ ╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝   ╚══════╝╚═╝  ╚═╝╚═╝     ", colors.green));
     console.log(color("╔═════════════════════════════════════════════════════════════╗", colors.green));
     console.log(color("║  TOOLS       : WHATSAPP MESSENGER                           ║", colors.brightGreen));
-    console.log(color("║  VERSION     : 3.2.0 (PROTOCOL FIX)                         ║", colors.green));
+    console.log(color("║  VERSION     : 3.3.0 (STABLE)                               ║", colors.green));
     console.log(color("║  OWNER       : KRIX                                        ║", colors.brightGreen));
     console.log(color("╚═════════════════════════════════════════════════════════════╝", colors.green));
 };
@@ -101,14 +98,11 @@ async function connectToWhatsApp() {
 
     sock = makeWASocket({
         version,
-        logger: pino({ level: "silent" }),
+        logger: pino({ level: "fatal" }),
         auth: state,
         printQRInTerminal: false,
-        browser: Browsers.macOS("Desktop"),
-        markOnlineOnConnect: true,
-        connectTimeoutMs: 60000,
-        defaultQueryTimeoutMs: 60000,
-        keepAliveIntervalMs: 30000
+        browser: ["Ubuntu", "Chrome", "20.0.04"],
+        markOnlineOnConnect: true
     });
 
     sock.ev.on("creds.update", saveCreds);
@@ -119,23 +113,24 @@ async function connectToWhatsApp() {
         phoneNumber = phoneNumber.replace(/[^0-9]/g, "");
 
         if (!phoneNumber) {
-            console.log(color("[!] Invalid phone number provided. Restarting..."));
+            console.log(color("[!] Invalid phone number. Retrying..."));
             return setTimeout(connectToWhatsApp, 2000);
         }
 
-        await delay(3000);
+        await delay(4000);
 
         try {
             const code = await sock.requestPairingCode(phoneNumber);
             showBanner();
             console.log(color(`\n[✓] YOUR PAIRING CODE: ${code}\n`, colors.brightGreen));
-            console.log(color("[!] Open WhatsApp -> Linked Devices -> Link with Phone Number.\n"));
+            console.log(color("[!] Enter this code immediately on WhatsApp (Linked Devices -> Link with Phone Number)\n"));
         } catch (err) {
-            console.log(color(`[!] Pairing Code Request Failed: ${err.message}`));
+            console.log(color(`[!] Pairing failed: ${err.message}`));
+            console.log(color("[!] Auto-clearing session... Toggle Flight Mode on phone and run again."));
             if (fs.existsSync("./auth_info")) {
                 fs.rmSync("./auth_info", { recursive: true, force: true });
             }
-            return setTimeout(connectToWhatsApp, 3000);
+            process.exit(1);
         }
     }
 
